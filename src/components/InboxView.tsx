@@ -316,6 +316,17 @@ export function InboxView({
                     </div>
                   )}
 
+                  {/* Ränder nicht erkannt Badge */}
+                  {(doc.detected === 0 || doc.detected === false) && (
+                    <div
+                      className="absolute bottom-2.5 left-2.5 bg-amber-500/95 backdrop-blur-xs text-white text-[10px] font-semibold px-2 py-0.5 rounded-lg shadow-xs flex items-center gap-1"
+                      title="Ränder nicht erkannt – bitte prüfen"
+                    >
+                      <AlertTriangle className="w-3 h-3 shrink-0" />
+                      <span>Ränder prüfen</span>
+                    </div>
+                  )}
+
                   {/* Quelle oben links */}
                   <div
                     className="absolute top-2.5 left-2.5 bg-white/90 dark:bg-zinc-900/90 text-zinc-600 dark:text-zinc-300 p-1 rounded-md shadow-xs"
@@ -344,6 +355,13 @@ export function InboxView({
                         </span>
                       )}
                     </div>
+
+                    {(doc.detected === 0 || doc.detected === false) && (
+                      <div className="mt-2 flex items-center gap-1.5 text-[11px] font-medium text-amber-600 dark:text-amber-400">
+                        <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                        <span className="truncate">Ränder nicht erkannt – bitte prüfen</span>
+                      </div>
+                    )}
                   </div>
 
                   {/* Fußzeile mit Erfassungsdatum */}

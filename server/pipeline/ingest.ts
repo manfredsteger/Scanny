@@ -131,6 +131,7 @@ export async function ingestFile(options: IngestOptions): Promise<number> {
       original_name,
       title,
       color_mode,
+      detected,
       created_at,
       updated_at
     ) VALUES (
@@ -140,6 +141,7 @@ export async function ingestFile(options: IngestOptions): Promise<number> {
       ?,
       ?,
       ?,
+      NULL,
       strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
       strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
     )
@@ -169,6 +171,7 @@ export async function ingestFile(options: IngestOptions): Promise<number> {
     db.prepare(`
       UPDATE documents
       SET status = 'error',
+          detected = NULL,
           error = ?,
           updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
       WHERE id = ?

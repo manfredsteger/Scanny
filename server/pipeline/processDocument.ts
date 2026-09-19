@@ -8,10 +8,25 @@ import { getDb, paths } from '../db.js';
 
 const execFileAsync = promisify(execFile);
 
-// Verzeichnis dieser Datei bestimmen (für scan.py)
+// Verzeichnis dieser Datei bestimmen (für Fallback-Pfad zu scan.py)
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const SCAN_PY_PATH = path.resolve(__dirname, 'scan.py');
+
+// scan.py-Pfad auflösen: Bevorzugt server/pipeline/scan.py relativ zum Arbeitsverzeichnis (cwd),
+// mit Fallback auf den Pfad relativ zu __dirname
+function resolveScanPyPath(): string {
+  const cwdPath = path.resolve(process.cwd(), 'server/pipeline/scan.py');
+  if (fs.existsSync(cwdPath)) {
+    return cwdPath;
+  }
+  const dirnamePath = path.resolve(__dirname, 'scan.py');
+  if (fs.existsSync(dirnamePath)) {
+    return dirnamePath;
+  }
+  return cwdPath;
+}
+
+export const SCAN_PY_PATH = resolveScanPyPath();
 
 export interface ScanResult {
   ok: boolean;
@@ -113,6 +128,7 @@ export async function processDocument(id: number): Promise<void> {
     db.prepare(`
       UPDATE documents
       SET status = 'error',
+          detected = NULL,
           error = ?,
           updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
       WHERE id = ?
@@ -238,6 +254,7 @@ export async function processDocument(id: number): Promise<void> {
     db.prepare(`
       UPDATE documents
       SET status = 'error',
+          detected = NULL,
           error = ?,
           updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
       WHERE id = ?

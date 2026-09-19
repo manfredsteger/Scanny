@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import multer from 'multer';
 import path from 'node:path';
 import fs from 'node:fs';
+import sharp from 'sharp';
 import { getDb, paths } from '../db.js';
 import { ingestFile } from '../pipeline/ingest.js';
 import { documentQueue } from '../pipeline/queue.js';
@@ -354,11 +355,50 @@ documentsRouter.get('/documents/:id/scan', (req: Request, res: Response) => {
     }
 
     res.setHeader('Content-Type', 'image/png');
-    res.setHeader('Cache-Control', 'public, max-age=86400');
+    res.setHeader('Cache-Control', 'no-cache');
     res.sendFile(scanPath);
   } catch (error: any) {
     console.error('Fehler beim Ausliefern des aufbereiteten Bildes:', error);
     res.status(500).json({ error: 'Aufbereitetes Bild konnte nicht ausgeliefert werden.' });
+  }
+});
+
+// GET /api/documents/:id/work-preview -> DATA_DIR/work/<id>.jpg, verkleinert auf max. 1600 px, Cache-Control no-cache
+documentsRouter.get('/documents/:id/work-preview', async (req: Request, res: Response) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) {
+      return res.status(400).json({ error: 'Ungültige Dokument-ID.' });
+    }
+
+    const workPath = path.join(paths.workDir, `${id}.jpg`);
+    if (!fs.existsSync(workPath)) {
+      return res.status(404).json({ error: 'Arbeitsbild nicht gefunden.' });
+    }
+
+    res.setHeader('Content-Type', 'image/jpeg');
+    res.setHeader('Cache-Control', 'no-cache');
+
+    const image = sharp(workPath);
+    const metadata = await image.metadata();
+
+    if ((metadata.width && metadata.width > 1600) || (metadata.height && metadata.height > 1600)) {
+      const resized = await image
+        .resize({
+          width: 1600,
+          height: 1600,
+          fit: 'inside',
+          withoutEnlargement: true,
+        })
+        .jpeg({ quality: 90 })
+        .toBuffer();
+      return res.send(resized);
+    }
+
+    return res.sendFile(workPath);
+  } catch (error: any) {
+    console.error('Fehler beim Ausliefern des Arbeitsbildes:', error);
+    res.status(500).json({ error: 'Arbeitsbild konnte nicht ausgeliefert werden.' });
   }
 });
 
@@ -399,7 +439,16 @@ documentsRouter.patch('/documents/:id', async (req: Request, res: Response) => {
     const finalUserEdited = user_edited !== undefined ? user_edited : existing.user_edited;
     const finalColorMode = color_mode !== undefined ? color_mode : existing.color_mode;
     const finalRotation = rotation !== undefined ? rotation : existing.rotation;
-    const finalCorners = corners !== undefined ? (typeof corners === 'string' ? corners : JSON.stringify(corners)) : existing.corners;
+    const rotationChanged = rotation !== undefined && rotation !== existing.rotation;
+
+    // Drehen nach der ersten Aufbereitung: Ändert sich rotation, corners auf NULL setzen (neu erkennen),
+    // außer der Client schickt im selben Request neue corners mit.
+    let finalCorners: string | null = existing.corners;
+    if (corners !== undefined) {
+      finalCorners = corners === null ? null : (typeof corners === 'string' ? corners : JSON.stringify(corners));
+    } else if (rotationChanged) {
+      finalCorners = null;
+    }
 
     let finalFolderId = existing.folder_id;
     if (folder_id !== undefined) {
@@ -461,8 +510,8 @@ documentsRouter.patch('/documents/:id', async (req: Request, res: Response) => {
     const needsReprocessing =
       Boolean(reprocess) ||
       (color_mode !== undefined && color_mode !== existing.color_mode) ||
-      (rotation !== undefined && rotation !== existing.rotation) ||
-      (corners !== undefined && corners !== existing.corners);
+      rotationChanged ||
+      finalCorners !== existing.corners;
 
     if (needsReprocessing && existing.original_path && !existing.original_path.toLowerCase().endsWith('.pdf')) {
       db.prepare(`

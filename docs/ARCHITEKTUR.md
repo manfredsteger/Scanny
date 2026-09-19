@@ -70,7 +70,7 @@ Alle Pfade werden über `process.cwd()`-relative Defaults aufgelöst und beim Se
 
 ## 4. Wichtige Regeln ("Nicht verändern")
 
-Entwickler müssen die folgenden 7 Regeln zwingend beachten:
+Entwickler müssen die folgenden 8 Regeln zwingend beachten:
 
 1. **Dockerfile**: Im Builder-Stage immer `COPY package.json ./` verwenden (NICHT `package*.json`). Die lokale `package-lock.json` stammt von macOS und bricht native Rollup-/Binary-Pakete unter Linux (`npm/cli#4828`).
 2. **PORT nie hartkodieren**: Immer `process.env.PORT` mit Fallback auslesen (`parseInt(process.env.PORT || '3000', 10)`).
@@ -79,3 +79,4 @@ Entwickler müssen die folgenden 7 Regeln zwingend beachten:
 5. **Vollständige Imports**: Jede neue Komponente, Funktion oder Schnittstelle muss explizit importiert werden. Vor Abschluss jeder Änderung müssen alle Imports und TypeScript-Builds validiert werden.
 6. **Alles lokal**: Keine Cloud-Dienste, keine Cloud-KI (z. B. Gemini, OpenAI), keine externen Web-APIs mit Dokumenteninhalten und keine CDN-Abhängigkeiten zur Laufzeit. Private Steuerbelege bleiben zu 100% auf dem Rechner des Nutzers.
 7. **Dateisystem zuerst, dann DB**: Bei Datei- und Ordneroperationen (Erstellen, Umbenennen, Verschieben, Löschen) wird immer zuerst die Dateisystem-Operation ausgeführt und validiert. Erst bei fehlerfreiem Erfolg wird der entsprechende Datenbank-Eintrag aktualisiert oder angelegt. Dateisystem-Fehler niemals verschlucken, sondern mit aussagekräftiger Meldung als HTTP-Fehlerstatus (409 oder 500) beantworten.
+8. **Dokumentenecken (corners) und Drehung**: Die gespeicherten Ecken (`corners`) beziehen sich IMMER auf das bereits gedrehte Arbeitsbild (nach Anwendung von `rotation`). Ändert sich die Drehung (`rotation`), werden gespeicherte `corners` in der Datenbank zurückgesetzt (`NULL`, automatische Neuerkennung), sofern nicht explizit neue Ecken im selben Aufruf übergeben werden.

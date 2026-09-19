@@ -28,6 +28,7 @@ export interface SystemHealth {
     python3: boolean;
     opencv: boolean;
     'heif-convert'?: boolean;
+    'scan.py'?: boolean;
     [key: string]: boolean | undefined;
   };
 }

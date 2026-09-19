@@ -6,6 +6,9 @@ Verwendung:
           [--corners '<json [[x,y],[x,y],[x,y],[x,y]]>'] [--rotation 0|90|180|270]
           [--detect-only]
 
+WICHTIG: Die Ecken (corners) beziehen sich IMMER auf das bereits gedrehte Arbeitsbild
+(nach Anwendung von --rotation).
+
 Gibt genau EINE JSON-Zeile auf stdout aus:
   {"ok":true,"corners":[[..],[..],[..],[..]],"detected":true,"width":2480,"height":3508,"layout":"a4"}
 Bei Fehlern:
@@ -49,8 +52,9 @@ def order_points(pts):
 
 def find_document_corners(img):
     """
-    Findet die 4 Ecken des Dokuments im Bild oder fällt auf die Bildgrenzen zurück.
+    Findet die 4 Ecken des Dokuments im Bild oder fällt auf Näherungen / Bildgrenzen zurück.
     Gibt (ordered_corners, detected_bool) zurück.
+    Hinweis: Ecken beziehen sich auf das übergebene (bereits gedrehte) Bild.
     """
     import cv2
 
@@ -82,29 +86,35 @@ def find_document_corners(img):
     contours = sorted(contours, key=cv2.contourArea, reverse=True)[:10]
 
     img_area = float(new_w * new_h)
+    min_area = 0.08 * img_area  # Mindestfläche 8 % (unterstützt auch schmale Kassenbelege)
     found_corners = None
     detected = False
 
-    # Die 10 größten Konturen prüfen
+    # Die 10 größten Konturen prüfen mit iterativ aufgeweichtem epsilon (0.02, 0.03, 0.04, 0.05 * Umfang)
     for c in contours:
         peri = cv2.arcLength(c, True)
-        approx = cv2.approxPolyDP(c, 0.02 * peri, True)
-        area = cv2.contourArea(approx)
-
-        if len(approx) == 4 and cv2.isContourConvex(approx) and area > (0.20 * img_area):
-            found_corners = approx.reshape(4, 2).astype(np.float32)
-            detected = True
+        if peri <= 0:
+            continue
+        for eps_factor in [0.02, 0.03, 0.04, 0.05]:
+            approx = cv2.approxPolyDP(c, eps_factor * peri, True)
+            area = cv2.contourArea(approx)
+            if len(approx) == 4 and cv2.isContourConvex(approx) and area > min_area:
+                found_corners = approx.reshape(4, 2).astype(np.float32)
+                detected = True
+                break
+        if found_corners is not None:
             break
 
-    # Fallback: minAreaRect der größten Kontur, falls > 20% Fläche
+    # Erster Fallback: minAreaRect der größten Kontur, falls > 8% Fläche
+    # Setzt detected=false, damit die UI "Ränder nicht sicher erkannt – bitte prüfen" anzeigt
     if found_corners is None:
         if contours:
             rect = cv2.minAreaRect(contours[0])
             box = cv2.boxPoints(rect)
             area = cv2.contourArea(box)
-            if area > (0.20 * img_area):
+            if area > min_area:
                 found_corners = box.astype(np.float32)
-                detected = True
+                detected = False
 
     # Zweiter Fallback: Ganzes Bild als Ecken nehmen
     if found_corners is None:
@@ -166,6 +176,7 @@ def main():
         h_orig, w_orig = img.shape[:2]
 
         # 3. Ecken finden (falls keine --corners übergeben)
+        # HINWEIS: corners beziehen sich IMMER auf das bereits gedrehte Arbeitsbild (img).
         detected = False
         ordered_corners = None
 
@@ -218,23 +229,92 @@ def main():
         M = cv2.getPerspectiveTransform(ordered_corners, dst)
         warped = cv2.warpPerspective(img, M, (target_w, target_h), flags=cv2.INTER_CUBIC)
 
-        # 5. Hintergrund / Schatten ausgleichen (vor dem Schwarz-Weiß)
-        # Graustufen; Hintergrund schätzen per dilate mit 7x7-Kernel + medianBlur 21;
-        # normalisiert = 255 - absdiff(gray, bg); dann normalize auf 0-255.
-        gray = cv2.cvtColor(warped, cv2.COLOR_BGR2GRAY)
-        k_bg = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
+        # Nach warpPerspective rundum 1 % des Randes abschneiden (nur wenn detected),
+        # um verbleibende Papierkantenlinien sauber zu entfernen
+        if detected:
+            crop_x = int(round(target_w * 0.01))
+            crop_y = int(round(target_h * 0.01))
+            if target_w > 2 * crop_x + 10 and target_h > 2 * crop_y + 10:
+                warped = warped[crop_y:target_h - crop_y, crop_x:target_w - crop_x]
+
+        # 5. Zielgröße und Layout bestimmen: ZUERST auf Zielgröße skalieren,
+        # damit danach keine Kantenglättung/Interpolation den S/W-Modus verfälscht!
+        pw = warped.shape[1]
+        ph = warped.shape[0]
+        is_landscape = pw > ph
+
+        if is_landscape:
+            a4_w = 3508
+            a4_h = 2480
+            target_ratio = 3508.0 / 2480.0
+        else:
+            a4_w = 2480
+            a4_h = 3508
+            target_ratio = 2480.0 / 3508.0
+
+        current_ratio = float(pw) / float(ph)
+        ratio_diff = abs(current_ratio - target_ratio) / target_ratio
+
+        if ratio_diff < 0.15:
+            # Verhältnis nah an A4 (< 15% Abweichung): layout "a4"
+            layout = "a4"
+            interp = cv2.INTER_AREA if (pw > a4_w or ph > a4_h) else cv2.INTER_CUBIC
+            work_img = cv2.resize(warped, (a4_w, a4_h), interpolation=interp)
+        else:
+            # Schmaler Beleg (z. B. Kassenbon): layout "fit"
+            layout = "fit"
+            margin_x = int(round(a4_w * 0.05))
+            margin_y = int(round(a4_h * 0.05))
+            avail_w = a4_w - (2 * margin_x)
+            avail_h = a4_h - (2 * margin_y)
+
+            # Schmaler Beleg prüfen (Verhältnis > 2:1): max. ~945 px breit bei 300 dpi (80mm Bonbreite)
+            is_narrow = (float(ph) / float(pw) > 2.0) if not is_landscape else (float(pw) / float(ph) > 2.0)
+            if is_narrow and not is_landscape:
+                max_w = min(avail_w, 945)
+            else:
+                max_w = avail_w
+
+            max_h = avail_h
+            scale_fit = min(float(max_w) / float(pw), float(max_h) / float(ph))
+
+            fit_w = max(int(round(pw * scale_fit)), 1)
+            fit_h = max(int(round(ph * scale_fit)), 1)
+
+            interp = cv2.INTER_AREA if scale_fit < 1.0 else cv2.INTER_CUBIC
+            work_img = cv2.resize(warped, (fit_w, fit_h), interpolation=interp)
+
+        # 6. Schattenausgleich & Farbmodus auf das bereits skalierte Bild anwenden
+        cur_w = work_img.shape[1]
+
+        # Kernel-Größen relativ zur Bildbreite wählen:
+        # dilate ca. Breite/350, ungerade, mind. 7
+        d_k = int(round(cur_w / 350.0))
+        if d_k % 2 == 0:
+            d_k += 1
+        if d_k < 7:
+            d_k = 7
+        k_bg = cv2.getStructuringElement(cv2.MORPH_RECT, (d_k, d_k))
+
+        # medianBlur ca. Breite/120, ungerade, mind. 21
+        m_k = int(round(cur_w / 120.0))
+        if m_k % 2 == 0:
+            m_k += 1
+        if m_k < 21:
+            m_k = 21
+
+        gray = cv2.cvtColor(work_img, cv2.COLOR_BGR2GRAY)
         dilated_bg = cv2.dilate(gray, k_bg)
-        bg = cv2.medianBlur(dilated_bg, 21)
+        bg = cv2.medianBlur(dilated_bg, m_k)
 
         diff = cv2.absdiff(gray, bg)
         norm = 255 - diff
         normalized_gray = cv2.normalize(norm, None, alpha=0, beta=255, norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_8U)
 
-        # 6. Farbmodus anwenden
         if args.mode == "bw":
             # adaptiveThreshold (ADAPTIVE_THRESH_GAUSSIAN_C, THRESH_BINARY,
             # blockSize abhängig von der Bildbreite: ca. breite/80, ungerade, mind. 15; C = 10)
-            block_size = int(round(target_w / 80.0))
+            block_size = int(round(cur_w / 80.0))
             if block_size % 2 == 0:
                 block_size += 1
             if block_size < 15:
@@ -259,78 +339,32 @@ def main():
 
             processed = thresh
         elif args.mode == "gray":
-            # normalisiertes Graustufenbild, leichter Kontrast (CLAHE clipLimit 2.0)
+            # normalisiertes Graustufenbild, Kontrast via CLAHE (clipLimit 2.0)
             clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
             processed = clahe.apply(normalized_gray)
         else: # "color"
-            # Weißabgleich / Schattenausgleich über das normalisierte Bild:
             # Im LAB-Farbraum Luminanz (L) durch normalized_gray ersetzen
-            lab = cv2.cvtColor(warped, cv2.COLOR_BGR2LAB)
+            lab = cv2.cvtColor(work_img, cv2.COLOR_BGR2LAB)
             lab[:, :, 0] = normalized_gray
             processed = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
 
-        # 7. DIN A4 (300 dpi = 2480 x 3508 px)
-        pw = processed.shape[1]
-        ph = processed.shape[0]
-        is_landscape = pw > ph
-
-        if is_landscape:
-            a4_w = 3508
-            a4_h = 2480
-            target_ratio = 3508.0 / 2480.0
+        # 7. Finales Bild zusammensetzen (im bw-Modus garantiert nur 0 und 255)
+        if layout == "a4":
+            final_img = processed
         else:
-            a4_w = 2480
-            a4_h = 3508
-            target_ratio = 2480.0 / 3508.0
-
-        current_ratio = float(pw) / float(ph)
-        ratio_diff = abs(current_ratio - target_ratio) / target_ratio
-
-        if ratio_diff < 0.15:
-            # Verhältnis nah an A4 (< 15% Abweichung): auf A4 skalieren, layout "a4"
-            interp = cv2.INTER_AREA if (pw > a4_w or ph > a4_h) else cv2.INTER_CUBIC
-            final_img = cv2.resize(processed, (a4_w, a4_h), interpolation=interp)
-            layout = "a4"
-        else:
-            # Sonst (z.B. Kassenzettel, Quittung, etc.): NICHT verzerren!
-            # Proportional so skalieren, dass es mit 5% Rand in die A4-Seite passt.
-            # Für schmale Belege (Verhältnis > 2:1): max. ~945 px breit (echte Bon-Breite 80mm bei 300 dpi).
-            # Mittig oben auf eine weiße A4-Fläche setzen (layout "fit").
-            margin_x = int(round(a4_w * 0.05))
-            margin_y = int(round(a4_h * 0.05))
-            avail_w = a4_w - (2 * margin_x)
-            avail_h = a4_h - (2 * margin_y)
-
-            # Schmaler Beleg prüfen
-            is_narrow = (float(ph) / float(pw) > 2.0) if not is_landscape else (float(pw) / float(ph) > 2.0)
-            if is_narrow and not is_landscape:
-                max_w = min(avail_w, 945)
-            elif is_narrow and is_landscape:
-                max_w = avail_w
-            else:
-                max_w = avail_w
-
-            max_h = avail_h
-            scale_fit = min(float(max_w) / float(pw), float(max_h) / float(ph))
-
-            fit_w = max(int(round(pw * scale_fit)), 1)
-            fit_h = max(int(round(ph * scale_fit)), 1)
-
-            interp = cv2.INTER_AREA if scale_fit < 1.0 else cv2.INTER_CUBIC
-            scaled_doc = cv2.resize(processed, (fit_w, fit_h), interpolation=interp)
-
-            # Weiße A4-Leinwand anlegen
+            # layout "fit": mittig oben auf weiße A4-Leinwand setzen
             if len(processed.shape) == 2:
                 canvas = np.full((a4_h, a4_w), 255, dtype=np.uint8)
             else:
                 canvas = np.full((a4_h, a4_w, 3), 255, dtype=np.uint8)
 
-            # Mittig oben platzieren
+            fit_w = processed.shape[1]
+            fit_h = processed.shape[0]
             offset_x = (a4_w - fit_w) // 2
+            margin_y = int(round(a4_h * 0.05))
             offset_y = margin_y
-            canvas[offset_y:offset_y + fit_h, offset_x:offset_x + fit_w] = scaled_doc
+            canvas[offset_y:offset_y + fit_h, offset_x:offset_x + fit_w] = processed
             final_img = canvas
-            layout = "fit"
 
         # 8. Als PNG speichern
         out_dir = os.path.dirname(os.path.abspath(args.output_path))
@@ -359,3 +393,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

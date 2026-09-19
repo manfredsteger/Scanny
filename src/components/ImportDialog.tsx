@@ -9,6 +9,7 @@ import {
   ArrowRight,
   CheckCheck,
   RotateCcw,
+  RotateCw,
   AlertTriangle,
 } from 'lucide-react';
 import { Folder, ScannyDocument, DocumentFormData } from '../types';
@@ -35,6 +36,7 @@ export function ImportDialog({
   const [formDataMap, setFormDataMap] = useState<Record<number, DocumentFormData>>({});
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
+  const [previewMode, setPreviewMode] = useState<'processed' | 'original'>('processed');
 
   // Hilfsfunktion zum Erzeugen der Standard-Formulardaten für ein Dokument
   const getInitialFormData = useCallback(
@@ -343,6 +345,78 @@ export function ImportDialog({
     }
   };
 
+  // Schnellaktionen: Drehung ändern ("↺ 90°", "↻ 90°")
+  const handleRotate = async (doc: ScannyDocument, direction: 'cw' | 'ccw') => {
+    const cur = doc.rotation || 0;
+    const next = direction === 'cw' ? (cur + 90) % 360 : (cur - 90 + 360) % 360;
+    setDocuments((prev) =>
+      prev.map((d) => (d.id === doc.id ? { ...d, rotation: next, status: 'processing', error: null } : d))
+    );
+    setPreviewMode('processed');
+
+    try {
+      const res = await fetch(`/api/documents/${doc.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rotation: next }),
+      });
+      if (res.ok) {
+        const updated = await res.json();
+        setDocuments((prev) =>
+          prev.map((d) => (d.id === doc.id ? { ...d, ...updated } : d))
+        );
+      }
+    } catch (err) {
+      console.error('Fehler beim Drehen:', err);
+    }
+  };
+
+  // Schnellaktionen: Farbmodus ändern ("S/W | Grau | Farbe")
+  const handleColorMode = async (doc: ScannyDocument, mode: 'bw' | 'gray' | 'color') => {
+    if (doc.color_mode === mode) return;
+    setDocuments((prev) =>
+      prev.map((d) => (d.id === doc.id ? { ...d, color_mode: mode, status: 'processing', error: null } : d))
+    );
+    setPreviewMode('processed');
+
+    try {
+      const res = await fetch(`/api/documents/${doc.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ color_mode: mode }),
+      });
+      if (res.ok) {
+        const updated = await res.json();
+        setDocuments((prev) =>
+          prev.map((d) => (d.id === doc.id ? { ...d, ...updated } : d))
+        );
+      }
+    } catch (err) {
+      console.error('Fehler beim Ändern des Farbmodus:', err);
+    }
+  };
+
+  const isDocPdf = (doc?: ScannyDocument) =>
+    Boolean(doc?.original_name?.toLowerCase().endsWith('.pdf'));
+
+  const isDocHeic = (doc?: ScannyDocument) => {
+    const name = (doc?.original_name || '').toLowerCase();
+    return name.endsWith('.heic') || name.endsWith('.heif');
+  };
+
+  const getOriginalUrl = (doc: ScannyDocument) => {
+    const v = doc.updated_at ? `?v=${encodeURIComponent(doc.updated_at)}` : '';
+    if (isDocHeic(doc)) {
+      return `/api/documents/${doc.id}/work-preview${v}`;
+    }
+    return `/api/documents/${doc.id}/original${v}`;
+  };
+
+  const getScanUrl = (doc: ScannyDocument) => {
+    const v = doc.updated_at ? `?v=${encodeURIComponent(doc.updated_at)}` : '';
+    return `/api/documents/${doc.id}/scan${v}`;
+  };
+
   if (!isOpen || documents.length === 0) return null;
 
   return (
@@ -461,6 +535,15 @@ export function ImportDialog({
                             Fehler
                           </span>
                         )}
+                        {(doc.detected === 0 || doc.detected === false) && (
+                          <span
+                            className="flex items-center gap-1 text-[10px] text-amber-600 dark:text-amber-400 font-medium"
+                            title="Ränder nicht erkannt – bitte prüfen"
+                          >
+                            <AlertTriangle className="w-3 h-3 shrink-0" />
+                            Ränder prüfen
+                          </span>
+                        )}
                       </div>
                     </div>
                   </button>
@@ -470,49 +553,173 @@ export function ImportDialog({
           </div>
 
           {/* Mitte: Große Vorschau */}
-          <div className="flex-1 bg-zinc-100/70 dark:bg-zinc-950 flex flex-col items-center justify-center p-4 relative overflow-hidden">
+          <div className="flex-1 bg-zinc-100/70 dark:bg-zinc-950 flex flex-col p-4 relative overflow-hidden">
             {currentDoc ? (
-              <div className="w-full h-full flex flex-col items-center justify-center relative">
-                {/* PDF Vorschau über Original */}
-                {currentDoc.original_name.toLowerCase().endsWith('.pdf') ? (
-                  <iframe
-                    src={`/api/documents/${currentDoc.id}/original`}
-                    title="PDF Vorschau"
-                    className="w-full h-full rounded-xl border border-zinc-300 dark:border-zinc-800 bg-white"
-                  />
-                ) : (
-                  <div className="relative max-w-full max-h-full flex items-center justify-center">
-                    <img
-                      src={`/api/documents/${currentDoc.id}/original`}
-                      alt={currentDoc.original_name}
-                      className="max-h-[calc(92vh-180px)] max-w-full object-contain rounded-xl shadow-lg border border-zinc-200 dark:border-zinc-800"
-                    />
+              <div className="w-full h-full flex flex-col items-center justify-between relative">
+                {/* Gelbe Warnung: Ränder nicht erkannt */}
+                {(currentDoc.detected === 0 || currentDoc.detected === false) && (
+                  <div
+                    id="import-dialog-edge-warning"
+                    className="w-full mb-3 px-3.5 py-2 bg-amber-50 dark:bg-amber-950/50 border border-amber-200 dark:border-amber-800/80 rounded-xl text-xs text-amber-800 dark:text-amber-200 flex items-center gap-2 shadow-xs shrink-0"
+                  >
+                    <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
+                    <span className="font-semibold">Ränder nicht erkannt – bitte prüfen</span>
                   </div>
                 )}
 
-                {/* Overlay bei laufender Aufbereitung */}
-                {(currentDoc.status === 'processing' || currentDoc.status === 'queued') && (
-                  <div className="absolute inset-0 bg-black/40 backdrop-blur-xs flex flex-col items-center justify-center text-white rounded-xl">
-                    <Loader2 className="w-10 h-10 animate-spin mb-2 text-blue-400" />
-                    <p className="text-sm font-semibold">Wird aufbereitet…</p>
-                    <p className="text-xs text-white/70 mt-1">Du kannst die Felder rechts schon ausfüllen</p>
-                  </div>
-                )}
-
-                {/* Fehleranzeige */}
-                {currentDoc.status === 'error' && (
-                  <div className="absolute inset-0 bg-red-950/80 backdrop-blur-xs flex flex-col items-center justify-center text-white p-6 rounded-xl text-center">
-                    <AlertCircle className="w-10 h-10 text-red-400 mb-2" />
-                    <p className="text-sm font-semibold">Aufbereitung fehlgeschlagen</p>
-                    <p className="text-xs text-red-200 mt-1 max-w-md">{currentDoc.error || 'Unbekannter Fehler'}</p>
-                    <button
-                      type="button"
-                      onClick={() => handleRetry(currentDoc.id)}
-                      className="mt-4 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-semibold flex items-center gap-2 cursor-pointer transition-colors"
+                {/* Vorschau-Container */}
+                <div className="w-full flex-1 flex items-center justify-center relative min-h-0 overflow-hidden rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white/40 dark:bg-zinc-900/40">
+                  {/* Umschalter Aufbereitet | Original oben rechts (nur bei Nicht-PDF) */}
+                  {!isDocPdf(currentDoc) && (
+                    <div
+                      id="import-dialog-preview-mode-toggle"
+                      className="absolute top-3 right-3 z-20 flex items-center bg-white/95 dark:bg-zinc-900/95 backdrop-blur-xs p-0.5 rounded-xl border border-zinc-200/90 dark:border-zinc-800 shadow-sm text-xs font-medium"
                     >
-                      <RotateCcw className="w-3.5 h-3.5" />
-                      Erneut versuchen
-                    </button>
+                      <button
+                        type="button"
+                        onClick={() => setPreviewMode('processed')}
+                        className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer ${
+                          previewMode === 'processed'
+                            ? 'bg-blue-600 text-white font-semibold shadow-xs'
+                            : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white'
+                        }`}
+                      >
+                        Aufbereitet
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPreviewMode('original')}
+                        className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer ${
+                          previewMode === 'original'
+                            ? 'bg-blue-600 text-white font-semibold shadow-xs'
+                            : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white'
+                        }`}
+                      >
+                        Original
+                      </button>
+                    </div>
+                  )}
+
+                  {/* PDF Vorschau über Original */}
+                  {isDocPdf(currentDoc) ? (
+                    <iframe
+                      src={`/api/documents/${currentDoc.id}/original`}
+                      title="PDF Vorschau"
+                      className="w-full h-full rounded-xl border border-zinc-300 dark:border-zinc-800 bg-white"
+                    />
+                  ) : (
+                    <div className="relative max-w-full max-h-full flex items-center justify-center p-2">
+                      <img
+                        key={`${currentDoc.id}-${previewMode}-${currentDoc.updated_at}`}
+                        src={
+                          previewMode === 'processed' && (currentDoc.status === 'inbox' || currentDoc.status === 'filed')
+                            ? getScanUrl(currentDoc)
+                            : getOriginalUrl(currentDoc)
+                        }
+                        alt={currentDoc.original_name}
+                        className="max-h-[calc(92vh-220px)] max-w-full object-contain rounded-xl shadow-lg border border-zinc-200 dark:border-zinc-800"
+                      />
+                    </div>
+                  )}
+
+                  {/* Overlay bei laufender Aufbereitung */}
+                  {(currentDoc.status === 'processing' || currentDoc.status === 'queued') && (
+                    <div className="absolute inset-0 z-10 bg-black/45 backdrop-blur-xs flex flex-col items-center justify-center text-white rounded-xl">
+                      <Loader2 className="w-10 h-10 animate-spin mb-2 text-blue-400" />
+                      <p className="text-sm font-semibold">Wird aufbereitet…</p>
+                      <p className="text-xs text-white/75 mt-1">Du kannst die Felder rechts schon ausfüllen</p>
+                    </div>
+                  )}
+
+                  {/* Fehleranzeige */}
+                  {currentDoc.status === 'error' && (
+                    <div className="absolute inset-0 z-10 bg-red-950/85 backdrop-blur-xs flex flex-col items-center justify-center text-white p-6 rounded-xl text-center">
+                      <AlertCircle className="w-10 h-10 text-red-400 mb-2" />
+                      <p className="text-sm font-semibold">Aufbereitung fehlgeschlagen</p>
+                      <p className="text-xs text-red-200 mt-1 max-w-md">{currentDoc.error || 'Unbekannter Fehler'}</p>
+                      <button
+                        type="button"
+                        onClick={() => handleRetry(currentDoc.id)}
+                        className="mt-4 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-semibold flex items-center gap-2 cursor-pointer transition-colors"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5" />
+                        Erneut versuchen
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                {/* Schnellaktionen unter der Vorschau (Drehung + Farbmodus) */}
+                {!isDocPdf(currentDoc) && (
+                  <div className="mt-3 w-full flex flex-wrap items-center justify-between gap-2 shrink-0 px-1">
+                    {/* Drehung */}
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        id="import-quick-rotate-ccw"
+                        disabled={currentDoc.status === 'processing' || currentDoc.status === 'queued'}
+                        onClick={() => handleRotate(currentDoc, 'ccw')}
+                        className="px-3 py-1.5 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 hover:bg-zinc-50 dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-200 text-xs font-semibold flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                        title="Gegen den Uhrzeigersinn um 90° drehen (↺ 90°)"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5" />
+                        <span>↺ 90°</span>
+                      </button>
+                      <button
+                        type="button"
+                        id="import-quick-rotate-cw"
+                        disabled={currentDoc.status === 'processing' || currentDoc.status === 'queued'}
+                        onClick={() => handleRotate(currentDoc, 'cw')}
+                        className="px-3 py-1.5 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 hover:bg-zinc-50 dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-200 text-xs font-semibold flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                        title="Im Uhrzeigersinn um 90° drehen (↻ 90°)"
+                      >
+                        <RotateCw className="w-3.5 h-3.5" />
+                        <span>↻ 90°</span>
+                      </button>
+                    </div>
+
+                    {/* Farbmodus */}
+                    <div className="flex items-center rounded-xl bg-zinc-200/80 dark:bg-zinc-800 p-0.5 text-xs font-medium">
+                      <button
+                        type="button"
+                        id="import-quick-mode-bw"
+                        disabled={currentDoc.status === 'processing' || currentDoc.status === 'queued'}
+                        onClick={() => handleColorMode(currentDoc, 'bw')}
+                        className={`px-3 py-1 rounded-lg transition-all cursor-pointer ${
+                          currentDoc.color_mode === 'bw'
+                            ? 'bg-white dark:bg-zinc-900 text-zinc-900 dark:text-white font-semibold shadow-xs'
+                            : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white'
+                        } disabled:opacity-40 disabled:cursor-not-allowed`}
+                      >
+                        S/W
+                      </button>
+                      <button
+                        type="button"
+                        id="import-quick-mode-gray"
+                        disabled={currentDoc.status === 'processing' || currentDoc.status === 'queued'}
+                        onClick={() => handleColorMode(currentDoc, 'gray')}
+                        className={`px-3 py-1 rounded-lg transition-all cursor-pointer ${
+                          currentDoc.color_mode === 'gray'
+                            ? 'bg-white dark:bg-zinc-900 text-zinc-900 dark:text-white font-semibold shadow-xs'
+                            : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white'
+                        } disabled:opacity-40 disabled:cursor-not-allowed`}
+                      >
+                        Grau
+                      </button>
+                      <button
+                        type="button"
+                        id="import-quick-mode-color"
+                        disabled={currentDoc.status === 'processing' || currentDoc.status === 'queued'}
+                        onClick={() => handleColorMode(currentDoc, 'color')}
+                        className={`px-3 py-1 rounded-lg transition-all cursor-pointer ${
+                          currentDoc.color_mode === 'color'
+                            ? 'bg-white dark:bg-zinc-900 text-zinc-900 dark:text-white font-semibold shadow-xs'
+                            : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white'
+                        } disabled:opacity-40 disabled:cursor-not-allowed`}
+                      >
+                        Farbe
+                      </button>
+                    </div>
                   </div>
                 )}
               </div>

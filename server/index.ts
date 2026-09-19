@@ -7,6 +7,8 @@ import { settingsRouter } from './routes/settings.js';
 import { documentsRouter } from './routes/documents.js';
 import { initQueue } from './pipeline/queue.js';
 import { startWatcher } from './pipeline/watcher.js';
+import { SCAN_PY_PATH } from './pipeline/processDocument.js';
+import fs from 'node:fs';
 
 async function startServer() {
   const app = express();
@@ -69,6 +71,11 @@ async function startServer() {
     console.log(`         SCANNY_DIR: ${paths.scannyDir}`);
     console.log(`         Upload:     ${paths.watchDir}`);
     console.log(`         Archiv:     ${paths.archiveDir}`);
+    if (fs.existsSync(SCAN_PY_PATH)) {
+      console.log(`[Scanny] Pipeline scan.py gefunden: ${SCAN_PY_PATH}`);
+    } else {
+      console.warn(`[Scanny] WARNUNG: Pipeline scan.py NICHT gefunden unter: ${SCAN_PY_PATH}`);
+    }
   });
 }
 
