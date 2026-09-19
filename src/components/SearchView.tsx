@@ -48,6 +48,7 @@ export function SearchView({ folders, query, onOpenDocument }: SearchViewProps) 
     if (!q) {
       setHits([]);
       setError(null);
+      setLoading(false);
       return;
     }
     const controller = new AbortController();

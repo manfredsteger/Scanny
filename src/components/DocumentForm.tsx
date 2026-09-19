@@ -89,7 +89,12 @@ export function DocumentForm({
 
   const suggested = {
     doc_type: Boolean(extraction && !edited.has('doc_type') && value.doc_type && value.doc_type === extraction.type),
-    title: Boolean(extraction && !edited.has('title') && value.title),
+    title: Boolean(
+      extraction &&
+        !edited.has('title') &&
+        value.title &&
+        value.title === buildTitle(value.doc_type || null, value.sender || null, value.doc_date || null)
+    ),
     sender: Boolean(extraction && !edited.has('sender') && value.sender && value.sender === extraction.sender),
     doc_date: Boolean(extraction && !edited.has('doc_date') && value.doc_date && value.doc_date === extraction.date),
     amount_cents: Boolean(

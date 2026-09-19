@@ -173,6 +173,8 @@ export default function App() {
       const target = e.target as HTMLElement | null;
       const tag = target?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target?.isContentEditable) return;
+      // Nicht aus einem offenen Dialog oder Detail-Drawer heraus in die Suche dahinter springen
+      if (document.querySelector('[role="dialog"], #drawer-cancel-btn')) return;
       e.preventDefault();
       searchInputRef.current?.focus();
       searchInputRef.current?.select();

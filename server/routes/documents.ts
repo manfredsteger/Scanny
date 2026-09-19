@@ -600,6 +600,17 @@ export function patchDocument(id: number, input: any): PatchResult {
       }
     }
 
+    const rollbackPdf = () => {
+      if (finalPdfPath !== existing.pdf_path && finalPdfPath && existing.pdf_path) {
+        try {
+          moveOrCopySync(finalPdfPath, existing.pdf_path);
+        } catch (rbErr) {
+          console.error(`Archiv-PDF von Dokument ${id} konnte nicht zurückverschoben werden:`, rbErr);
+        }
+      }
+    };
+
+    try {
     db.prepare(`
       UPDATE documents
       SET title = ?,
@@ -631,6 +642,10 @@ export function patchDocument(id: number, input: any): PatchResult {
       finalPdfPath,
       id
     );
+    } catch (dbErr) {
+      rollbackPdf();
+      throw dbErr;
+    }
 
     // Falls Farbmodus, Drehung oder Ecken geändert wurden oder reprocess angefordert wurde,
     // Bild neu aufbereiten (asynchron über Queue)

@@ -134,6 +134,10 @@ describe('extractDate', () => {
     expect(extractDate('Datum 31.02.2026', NOW).date).toBe(null);
   });
 
+  it('verbindet kein Datum über einen Zeilenumbruch', () => {
+    expect(extractDate('Pos 12.\n03.2026', NOW).date).toBe(null);
+  });
+
   it('liefert die Fundstelle im Text', () => {
     const r = extractDate(RECHNUNG, NOW);
     expect(RECHNUNG.slice(r.span![0], r.span![1])).toBe('02.03.2026');
@@ -157,6 +161,12 @@ describe('extractAmount', () => {
 
   it('liest Tausenderpunkte und Werte in der Folgezeile', () => {
     expect(extractAmount('Gesamtbetrag\n1.234,56 EUR').cents).toBe(123456);
+  });
+
+  it('verklebt keine Zahlen über Leerzeichen oder Zeilenumbrüche', () => {
+    expect(extractAmount('Summe 3 119,00 EUR').cents).toBe(11900);
+    expect(extractAmount('Gesamt Menge 3\n119,00').cents).toBe(11900); // nicht 311900
+    expect(extractAmount('Gesamtbetrag 1.234,56 EUR').cents).toBe(123456);
   });
 
   it('nimmt Tabellenköpfe wie "Vorgang Betrag" nicht als Beschriftung', () => {

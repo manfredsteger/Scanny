@@ -85,9 +85,10 @@ export function FolderView({
       (typeFilter === 'all' || (d.doc_type || '') === typeFilter)
   );
 
+  const sortValue = (d: ScannyDocument) => (sortKey === 'title' ? d.title || d.original_name : d[sortKey]);
   const sortedDocs = [...filteredDocs].sort((a, b) => {
-    const av = a[sortKey];
-    const bv = b[sortKey];
+    const av = sortValue(a);
+    const bv = sortValue(b);
     // leere Werte immer ans Ende
     if (av === null || av === undefined || av === '') return 1;
     if (bv === null || bv === undefined || bv === '') return -1;

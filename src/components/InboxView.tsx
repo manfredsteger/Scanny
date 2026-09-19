@@ -445,8 +445,10 @@ export function InboxView({
                   className={`absolute top-2 left-2 z-10 w-6 h-6 rounded-lg border-2 flex items-center justify-center transition-all cursor-pointer ${
                     isSelected
                       ? 'bg-blue-600 border-blue-600 text-white opacity-100'
-                      : 'bg-white/90 dark:bg-zinc-900/90 border-zinc-300 dark:border-zinc-600 text-transparent opacity-0 group-hover:opacity-100'
-                  } ${selectedIds.size > 0 ? 'opacity-100' : ''}`}
+                      : `bg-white/90 dark:bg-zinc-900/90 border-zinc-300 dark:border-zinc-600 text-transparent ${
+                          selectedIds.size > 0 ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 focus:opacity-100'
+                        }`
+                  }`}
                 >
                   <Check className="w-3.5 h-3.5" />
                 </button>

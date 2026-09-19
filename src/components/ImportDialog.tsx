@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   X,
   CheckCircle2,
@@ -24,6 +24,7 @@ import {
 } from '../types';
 import { DocumentForm } from './DocumentForm';
 import { OcrTextView } from './OcrTextView';
+import { buildTitle } from '../../server/pipeline/title';
 
 interface ImportDialogProps {
   isOpen: boolean;
@@ -88,7 +89,11 @@ export function ImportDialog({
     []
   );
 
-  // Synchronisieren, wenn sich initialDocs ändert
+  // Synchronisieren, wenn ein neuer Stapel übergeben wird. Bewusst NUR auf initialDocs:
+  // Die Ordnerliste wird während der Aufbereitung laufend neu geladen – würde sie hier mitzählen,
+  // spränge der Dialog alle paar Sekunden auf den ersten Beleg und alte Stände zurück.
+  const foldersRef = useRef(folders);
+  foldersRef.current = folders;
   useEffect(() => {
     setDocuments(initialDocs);
     setSelectedIndex(0);
@@ -98,12 +103,12 @@ export function ImportDialog({
       const nextMap = { ...prev };
       for (const doc of initialDocs) {
         if (!nextMap[doc.id]) {
-          nextMap[doc.id] = getInitialFormData(doc, folders);
+          nextMap[doc.id] = getInitialFormData(doc, foldersRef.current);
         }
       }
       return nextMap;
     });
-  }, [initialDocs, folders, getInitialFormData]);
+  }, [initialDocs, getInitialFormData]);
 
   // Ausgewähltes Dokument
   const currentDoc = documents[selectedIndex] || documents[0];
@@ -172,11 +177,14 @@ export function ImportDialog({
             })
           );
 
-          // Nur Felder in formDataMap aktualisieren, die NICHT in user_edited stehen
+          // Nur Felder in formDataMap aktualisieren, die NICHT in user_edited stehen – und nur für Belege,
+          // die sich auf dem Server geändert haben (sonst würden lokale Änderungen alle 2 s überschrieben)
+          const previousUpdatedAt = new Map(documents.map((d) => [d.id, d.updated_at]));
           setFormDataMap((prevMap) => {
             const nextMap = { ...prevMap };
             for (const fresh of updatedList) {
               const existing = nextMap[fresh.id];
+              if (existing && previousUpdatedAt.get(fresh.id) === fresh.updated_at) continue;
               if (!existing) {
                 nextMap[fresh.id] = getInitialFormData(fresh, folders);
               } else {
@@ -188,11 +196,18 @@ export function ImportDialog({
                   : fresh.folder_id ||
                     (nextDocDate !== existing.doc_date ? suggestFolderId(folders, nextDocDate) : null) ||
                     existing.folder_id;
+                const nextSender = edited.has('sender') ? existing.sender : (fresh.sender || existing.sender);
+                const nextDocType = edited.has('doc_type') ? existing.doc_type : (fresh.doc_type || existing.doc_type);
                 nextMap[fresh.id] = {
                   ...existing,
-                  title: edited.has('title') ? existing.title : (fresh.title || existing.title),
-                  sender: edited.has('sender') ? existing.sender : (fresh.sender || existing.sender),
-                  doc_type: edited.has('doc_type') ? existing.doc_type : (fresh.doc_type || existing.doc_type),
+                  // Titel-Vorschlag aus den zusammengeführten Werten (lokal gewählter Typ/Absender zählt mit)
+                  title: edited.has('title')
+                    ? existing.title
+                    : buildTitle(nextDocType || null, nextSender || null, nextDocDate || null) ||
+                      fresh.title ||
+                      existing.title,
+                  sender: nextSender,
+                  doc_type: nextDocType,
                   doc_date: nextDocDate,
                   amount_cents: edited.has('amount_cents') ? existing.amount_cents : fresh.amount_cents,
                   amount_str: edited.has('amount_cents')

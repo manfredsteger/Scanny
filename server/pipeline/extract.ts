@@ -72,7 +72,7 @@ const MONTH_BY_PREFIX: Record<string, number> = {
 const DATE_PATTERNS: { re: RegExp; parse: (m: RegExpExecArray) => [number, number, number] | null }[] = [
   {
     // 15.03.2024, 15.03.24, 5. 3. 2024
-    re: /(?<!\d)(\d{1,2})\s?\.\s?(\d{1,2})\s?\.\s?(\d{4}|\d{2})(?![\d])/g,
+    re: /(?<!\d)(\d{1,2}) ?\. ?(\d{1,2}) ?\. ?(\d{4}|\d{2})(?![\d])/g,
     parse: (m) => [expandYear(m[3]), parseInt(m[2], 10), parseInt(m[1], 10)],
   },
   {
@@ -180,8 +180,9 @@ export function extractDate(
 // Betrag
 // ---------------------------------------------------------------------------
 
-// Deutsches Format: 1.234,56 | 1 234,56 | 12,50
-const MONEY_DE_RE = /(?<![\d.,])(\d{1,3}(?:[.\s]\d{3})+|\d+),(\d{2})(?![\d])(?!\s*%)/g;
+// Deutsches Format: 1.234,56 | 12,50 (Tausender nur mit Punkt oder geschütztem/schmalem Leerzeichen,
+// sonst würde "Menge 3" + "119,00" zu 3.119,00)
+const MONEY_DE_RE = /(?<![\d.,])(\d{1,3}(?:[.\u00a0\u202f]\d{3})+|\d+),(\d{2})(?![\d])(?!\s*%)/g;
 // Auf Summenzeilen auch OCR-/Bon-Schreibweise 12.50 zulassen
 const MONEY_DOT_RE = /(?<![\d.,])(\d+)\.(\d{2})(?![\d.,])(?!\s*%)/g;
 
@@ -210,7 +211,7 @@ function moneyIn(segment: string, offset: number, allowDot: boolean): Money[] {
       const start = offset + m.index;
       const end = start + m[0].length;
       if (out.some((o) => start < o.span[1] && end > o.span[0])) continue;
-      const euros = parseInt(m[1].replace(/[.\s]/g, ''), 10);
+      const euros = parseInt(m[1].replace(/[.\u00a0\u202f]/g, ''), 10);
       out.push({ cents: euros * 100 + parseInt(m[2], 10), span: [start, end] });
     }
   }

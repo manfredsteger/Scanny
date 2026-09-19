@@ -24,7 +24,8 @@ function docYear(doc: ScannyDocument): number {
 
 export function DashboardView({ documents, folders, onOpenInbox, onOpenFolder, onSelectDocument }: DashboardViewProps) {
   const year = new Date().getFullYear();
-  const inbox = documents.filter((d) => d.status === 'inbox' || d.status === 'queued' || d.status === 'processing');
+  // wie die Sidebar: alles, was noch nicht abgelegt ist (inkl. Fehler und laufender Aufbereitung)
+  const inbox = documents.filter((d) => d.status !== 'filed');
   const processing = documents.filter((d) => d.status === 'queued' || d.status === 'processing').length;
   const errors = documents.filter((d) => d.status === 'error');
   const filedThisYear = documents.filter((d) => d.status === 'filed' && docYear(d) === year);
