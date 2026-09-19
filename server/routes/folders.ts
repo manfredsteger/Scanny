@@ -327,6 +327,15 @@ foldersRouter.put('/folders/:id', (req: Request, res: Response) => {
       WHERE id = ?
     `).run(finalName, finalKind, finalYear, finalColor, id);
 
+    // Falls der Ordnername geändert wurde, die Pfade der PDFs der enthaltenen Dokumente anpassen
+    if (nameChanged) {
+      db.prepare(`
+        UPDATE documents
+        SET pdf_path = REPLACE(pdf_path, ?, ?)
+        WHERE folder_id = ? AND pdf_path IS NOT NULL
+      `).run(oldPath, newPath, id);
+    }
+
     // Zählung der abgelegten Dokumente abrufen
     const docCountRow = db
       .prepare("SELECT COUNT(*) as count FROM documents WHERE folder_id = ? AND status = 'filed'")

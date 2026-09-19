@@ -5,6 +5,7 @@ import { promisify } from 'node:util';
 import sharp from 'sharp';
 import { fileURLToPath } from 'node:url';
 import { getDb, paths } from '../db.js';
+import { runOcrPipeline } from './ocr.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -140,26 +141,6 @@ export async function processDocument(id: number): Promise<void> {
   const baseTitle = path.parse(doc.original_name || origPath).name;
 
   try {
-    // Falls PDF: In diesem Schritt überspringen (wird in Schritt 4 an OCR übergeben)
-    if (ext === '.pdf') {
-      console.log(`[Pipeline] Dokument ${id} ist ein PDF. Bildaufbereitung wird übersprungen.`);
-      db.prepare(`
-        UPDATE documents
-        SET status = CASE
-              WHEN folder_id IS NOT NULL THEN 'filed'
-              ELSE 'inbox'
-            END,
-            title = CASE
-              WHEN title IS NULL OR TRIM(title) = '' THEN ?
-              ELSE title
-            END,
-            error = NULL,
-            updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
-        WHERE id = ?
-      `).run(baseTitle, id);
-      return;
-    }
-
     // Sicherstellen, dass Arbeitsverzeichnisse existieren
     if (!fs.existsSync(paths.workDir)) {
       fs.mkdirSync(paths.workDir, { recursive: true });
@@ -168,13 +149,95 @@ export async function processDocument(id: number): Promise<void> {
       fs.mkdirSync(paths.thumbsDir, { recursive: true });
     }
 
-    const intermediateJpg = path.join(paths.workDir, `${id}.jpg`);
     const outputPng = path.join(paths.workDir, `${id}.png`);
     const targetThumb = path.join(paths.thumbsDir, `${id}.webp`);
 
+    // ==========================================
+    // A) PDF-Eingang (Datei war schon PDF)
+    // ==========================================
+    if (ext === '.pdf') {
+      console.log(`[Pipeline] Dokument ${id} ist ein PDF. Erzeuge Vorschau & starte OCR (--skip-text)...`);
+
+      // 1. Seite 1 des PDFs rendern für Thumbnail und Vorschau-Cache (work/<id>.png)
+      try {
+        await execFileAsync('gs', [
+          '-sDEVICE=png16m',
+          '-dFirstPage=1',
+          '-dLastPage=1',
+          '-r150',
+          '-o', outputPng,
+          origPath,
+        ], { timeout: 30000 });
+
+        if (fs.existsSync(outputPng)) {
+          await sharp(outputPng)
+            .resize({ width: 400, withoutEnlargement: true })
+            .webp({ quality: 80 })
+            .toFile(targetThumb);
+        }
+      } catch (gsErr) {
+        console.warn(`[Pipeline] Konnte Seite 1 des PDFs ${id} nicht mit Ghostscript rendern:`, gsErr);
+      }
+
+      // 2. OCR-Pipeline aufrufen (--skip-text Modus, ohne scan.py)
+      const ocrRes = await runOcrPipeline({
+        id,
+        inputPath: origPath,
+        isPdf: true,
+        docDate: doc.doc_date,
+        title: doc.title,
+        originalName: doc.original_name,
+        createdAt: doc.created_at,
+        folderId: doc.folder_id,
+        currentPdfPath: doc.pdf_path,
+      });
+
+      // 3. Datenbank aktualisieren
+      db.prepare(`
+        UPDATE documents
+        SET status = CASE
+              WHEN folder_id IS NOT NULL THEN 'filed'
+              ELSE 'inbox'
+            END,
+            thumb_path = CASE
+              WHEN ? = 1 THEN ?
+              ELSE thumb_path
+            END,
+            pdf_path = ?,
+            ocr_text = ?,
+            page_count = ?,
+            title = CASE
+              WHEN title IS NULL OR TRIM(title) = '' THEN ?
+              ELSE title
+            END,
+            error = NULL,
+            updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+        WHERE id = ?
+      `).run(
+        fs.existsSync(targetThumb) ? 1 : 0,
+        targetThumb,
+        ocrRes.pdfPath,
+        ocrRes.ocrText,
+        ocrRes.pageCount,
+        baseTitle,
+        id
+      );
+
+      console.log(
+        `[Pipeline] PDF-Dokument ${id} erfolgreich verarbeitet (${ocrRes.pageCount} Seite(n), OCR-Text: ${Boolean(
+          ocrRes.ocrText
+        )}).`
+      );
+      return;
+    }
+
+    // ==========================================
+    // B) Bild-Eingang (JPG, PNG, HEIC)
+    // ==========================================
+    const intermediateJpg = path.join(paths.workDir, `${id}.jpg`);
     const isHeic = ['.heic', '.heif'].includes(ext);
 
-    // 3. Arbeitskopie erzeugen (EXIF-korrigiert oder HEIC-konvertiert)
+    // 1. Arbeitskopie erzeugen (EXIF-korrigiert oder HEIC-konvertiert)
     if (isHeic) {
       // HEIC/HEIF: vorher mit "heif-convert -q 92 <in> <DATA_DIR/work/<id>.jpg>" umwandeln
       console.log(`[Pipeline] Konvertiere HEIC nach JPEG: ${origPath} -> ${intermediateJpg}`);
@@ -191,7 +254,7 @@ export async function processDocument(id: number): Promise<void> {
       await sharp(origPath).rotate().jpeg({ quality: 95 }).toFile(intermediateJpg);
     }
 
-    // 4. Farbmodus ermitteln: Dokument-Einstellung oder Standard aus settings
+    // 2. Farbmodus ermitteln: Dokument-Einstellung oder Standard aus settings
     let colorMode = doc.color_mode || 'bw';
     if (!doc.color_mode) {
       const defaultSetting = db
@@ -202,8 +265,10 @@ export async function processDocument(id: number): Promise<void> {
       }
     }
 
-    // 5. scan.py aufrufen
-    console.log(`[Pipeline] Starte scan.py für Dokument ${id} (Modus: ${colorMode}, Rotation: ${doc.rotation || 0})...`);
+    // 3. scan.py aufrufen (Entzerrung & Aufbereitung nach work/<id>.png)
+    console.log(
+      `[Pipeline] Starte scan.py für Dokument ${id} (Modus: ${colorMode}, Rotation: ${doc.rotation || 0})...`
+    );
     const scanRes = await runScanPy({
       inputPath: intermediateJpg,
       outputPath: outputPng,
@@ -219,13 +284,26 @@ export async function processDocument(id: number): Promise<void> {
     const detected = scanRes.detected ? 1 : 0;
     const cornersJson = scanRes.corners ? JSON.stringify(scanRes.corners) : null;
 
-    // 6. Neues Vorschaubild (webp) aus dem aufbereiteten PNG erzeugen
+    // 4. Neues Vorschaubild (webp) aus dem aufbereiteten PNG erzeugen
     await sharp(outputPng)
       .resize({ width: 400, withoutEnlargement: true })
       .webp({ quality: 80 })
       .toFile(targetThumb);
 
-    // 7. Datenbank aktualisieren: Ecken, Status, Thumbnail, ggf. Titel
+    // 5. OCR-Pipeline aufrufen (ocrmypdf mit --image-dpi 300)
+    const ocrRes = await runOcrPipeline({
+      id,
+      inputPath: outputPng,
+      isPdf: false,
+      docDate: doc.doc_date,
+      title: doc.title,
+      originalName: doc.original_name,
+      createdAt: doc.created_at,
+      folderId: doc.folder_id,
+      currentPdfPath: doc.pdf_path,
+    });
+
+    // 6. Datenbank aktualisieren: Ecken, Status, Thumbnail, PDF-Pfad, OCR-Text, Seitenzahl
     db.prepare(`
       UPDATE documents
       SET status = CASE
@@ -236,6 +314,9 @@ export async function processDocument(id: number): Promise<void> {
           detected = ?,
           color_mode = ?,
           thumb_path = ?,
+          pdf_path = ?,
+          ocr_text = ?,
+          page_count = ?,
           title = CASE
             WHEN title IS NULL OR TRIM(title) = '' THEN ?
             ELSE title
@@ -243,10 +324,22 @@ export async function processDocument(id: number): Promise<void> {
           error = NULL,
           updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
       WHERE id = ?
-    `).run(cornersJson, detected, colorMode, targetThumb, baseTitle, id);
+    `).run(
+      cornersJson,
+      detected,
+      colorMode,
+      targetThumb,
+      ocrRes.pdfPath,
+      ocrRes.ocrText,
+      ocrRes.pageCount,
+      baseTitle,
+      id
+    );
 
     console.log(
-      `[Pipeline] Dokument ${id} erfolgreich aufbereitet (detected: ${Boolean(detected)}, layout: ${scanRes.layout}, A4 PNG: ${outputPng}).`
+      `[Pipeline] Dokument ${id} erfolgreich aufbereitet & durchsuchbares PDF erzeugt (${ocrRes.pageCount} Seite(n), OCR-Text: ${Boolean(
+        ocrRes.ocrText
+      )}).`
     );
   } catch (err: any) {
     const errorMsg = err?.message || String(err);

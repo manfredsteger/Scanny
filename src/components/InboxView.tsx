@@ -327,6 +327,18 @@ export function InboxView({
                     </div>
                   )}
 
+                  {/* Seitenzahl-Badge wenn > 1 */}
+                  {doc.page_count !== null && doc.page_count !== undefined && doc.page_count > 1 && (
+                    <div
+                      id={`doc-tile-pages-${doc.id}`}
+                      className="absolute bottom-2.5 right-2.5 bg-zinc-900/80 backdrop-blur-xs text-white text-[10px] font-mono font-medium px-2 py-0.5 rounded-md shadow-xs flex items-center gap-1"
+                      title={`${doc.page_count} Seiten`}
+                    >
+                      <FileText className="w-3 h-3 text-zinc-300" />
+                      <span>{doc.page_count} Seiten</span>
+                    </div>
+                  )}
+
                   {/* Quelle oben links */}
                   <div
                     className="absolute top-2.5 left-2.5 bg-white/90 dark:bg-zinc-900/90 text-zinc-600 dark:text-zinc-300 p-1 rounded-md shadow-xs"

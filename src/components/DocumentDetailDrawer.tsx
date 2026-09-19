@@ -10,6 +10,10 @@ import {
   AlertTriangle,
   RotateCcw,
   RotateCw,
+  Image as ImageIcon,
+  AlignLeft,
+  Copy,
+  Check,
 } from 'lucide-react';
 import { Folder, ScannyDocument, DocumentFormData } from '../types';
 import { DocumentForm } from './DocumentForm';
@@ -37,10 +41,25 @@ export function DocumentDetailDrawer({
   const [isDeleting, setIsDeleting] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
   const [previewMode, setPreviewMode] = useState<'processed' | 'original'>('processed');
+  const [activeTab, setActiveTab] = useState<'preview' | 'pdf' | 'text'>('preview');
+  const [copied, setCopied] = useState(false);
+
+  const handleCopyOcrText = async () => {
+    if (!localDoc?.ocr_text) return;
+    try {
+      await navigator.clipboard.writeText(localDoc.ocr_text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      console.error('Fehler beim Kopieren:', err);
+    }
+  };
 
   useEffect(() => {
     setLocalDoc(document);
     if (document) {
+      const isPdf = Boolean(document.original_name?.toLowerCase().endsWith('.pdf'));
+      setActiveTab((prev) => (isPdf ? 'pdf' : prev === 'pdf' ? 'preview' : prev));
       let userEditedArr: string[] = [];
       if (document.user_edited) {
         try {
@@ -282,145 +301,306 @@ export function DocumentDetailDrawer({
               </div>
             )}
 
-            {/* Vorschau-Box */}
-            <div className="space-y-2.5">
-              <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-100/70 dark:bg-zinc-950 p-2 flex items-center justify-center relative min-h-[220px] max-h-[320px] overflow-hidden">
-                {/* Umschalter Aufbereitet | Original oben rechts (nur bei Nicht-PDF) */}
-                {!isPdf && (
-                  <div
-                    id="drawer-preview-mode-toggle"
-                    className="absolute top-3 right-3 z-20 flex items-center bg-white/95 dark:bg-zinc-900/95 backdrop-blur-xs p-0.5 rounded-xl border border-zinc-200/90 dark:border-zinc-800 shadow-sm text-xs font-medium"
+            {/* Vorschau- & Dokumentenbereich mit Tabs */}
+            <div className="space-y-3">
+              {/* Tab-Navigation: Vorschau | PDF | Text */}
+              <div className="flex items-center justify-between gap-2 border-b border-zinc-200 dark:border-zinc-800 pb-2">
+                <div className="flex items-center gap-1 p-1 bg-zinc-100 dark:bg-zinc-900 rounded-xl border border-zinc-200/80 dark:border-zinc-800">
+                  <button
+                    type="button"
+                    id="drawer-tab-preview"
+                    onClick={() => setActiveTab('preview')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer flex items-center gap-1.5 ${
+                      activeTab === 'preview'
+                        ? 'bg-white dark:bg-zinc-800 text-zinc-900 dark:text-white shadow-xs font-semibold'
+                        : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white'
+                    }`}
                   >
-                    <button
-                      type="button"
-                      onClick={() => setPreviewMode('processed')}
-                      className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer ${
-                        previewMode === 'processed'
-                          ? 'bg-blue-600 text-white font-semibold shadow-xs'
-                          : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white'
-                      }`}
-                    >
-                      Aufbereitet
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setPreviewMode('original')}
-                      className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer ${
-                        previewMode === 'original'
-                          ? 'bg-blue-600 text-white font-semibold shadow-xs'
-                          : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white'
-                      }`}
-                    >
-                      Original
-                    </button>
-                  </div>
-                )}
+                    <ImageIcon className="w-3.5 h-3.5" />
+                    <span>Vorschau</span>
+                  </button>
+                  <button
+                    type="button"
+                    id="drawer-tab-pdf"
+                    onClick={() => setActiveTab('pdf')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer flex items-center gap-1.5 ${
+                      activeTab === 'pdf'
+                        ? 'bg-white dark:bg-zinc-800 text-zinc-900 dark:text-white shadow-xs font-semibold'
+                        : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white'
+                    }`}
+                  >
+                    <FileText className="w-3.5 h-3.5" />
+                    <span>PDF</span>
+                    {localDoc.page_count !== null && localDoc.page_count !== undefined && localDoc.page_count > 1 && (
+                      <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-zinc-200 dark:bg-zinc-700 text-zinc-700 dark:text-zinc-300 font-mono">
+                        {localDoc.page_count}
+                      </span>
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    id="drawer-tab-text"
+                    onClick={() => setActiveTab('text')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer flex items-center gap-1.5 ${
+                      activeTab === 'text'
+                        ? 'bg-white dark:bg-zinc-800 text-zinc-900 dark:text-white shadow-xs font-semibold'
+                        : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white'
+                    }`}
+                  >
+                    <AlignLeft className="w-3.5 h-3.5" />
+                    <span>Text</span>
+                    {localDoc.ocr_text && (
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" title="Text vorhanden" />
+                    )}
+                  </button>
+                </div>
 
-                {isPdf ? (
-                  <iframe
-                    src={`/api/documents/${localDoc.id}/original`}
-                    title="PDF Vorschau"
-                    className="w-full h-64 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white"
-                  />
-                ) : (
-                  <img
-                    key={`${localDoc.id}-${previewMode}-${localDoc.updated_at}`}
-                    src={displayedImgUrl}
-                    alt={localDoc.original_name}
-                    className="max-h-64 object-contain rounded-lg shadow-xs"
-                  />
+                {localDoc.page_count !== null && localDoc.page_count !== undefined && localDoc.page_count > 1 && (
+                  <span className="text-xs text-zinc-500 dark:text-zinc-400 font-mono">
+                    {localDoc.page_count} Seiten
+                  </span>
                 )}
-
-                {/* Overlay bei laufender Aufbereitung */}
-                {(localDoc.status === 'processing' || localDoc.status === 'queued') && (
-                  <div className="absolute inset-0 bg-black/45 backdrop-blur-xs flex flex-col items-center justify-center text-white rounded-xl z-30">
-                    <Loader2 className="w-8 h-8 animate-spin mb-2 text-blue-400" />
-                    <p className="text-xs font-semibold">Wird aufbereitet…</p>
-                  </div>
-                )}
-
-                <a
-                  href={displayedImgUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="absolute bottom-3 right-3 z-10 bg-white/90 dark:bg-zinc-800/90 text-zinc-700 dark:text-zinc-200 px-2.5 py-1 rounded-lg text-xs font-medium shadow-xs hover:bg-white dark:hover:bg-zinc-700 flex items-center gap-1.5 transition-colors cursor-pointer"
-                >
-                  <ExternalLink className="w-3.5 h-3.5" />
-                  Vollbild
-                </a>
               </div>
 
-              {/* Schnellaktionen unter der Vorschau (Drehung + Farbmodus) */}
-              {!isPdf && (
-                <div className="flex flex-wrap items-center justify-between gap-2 px-1">
-                  {/* Drehung */}
-                  <div className="flex items-center gap-1.5">
-                    <button
-                      type="button"
-                      id="drawer-quick-rotate-ccw"
-                      disabled={localDoc.status === 'processing' || localDoc.status === 'queued'}
-                      onClick={() => handleRotate('ccw')}
-                      className="px-3 py-1.5 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 hover:bg-zinc-50 dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-200 text-xs font-semibold flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-                      title="Gegen den Uhrzeigersinn um 90° drehen (↺ 90°)"
+              {/* Tab 1: Vorschau (Bild mit Aufbereitet/Original Umschalter und Schnellaktionen) */}
+              {activeTab === 'preview' && (
+                <div className="space-y-2.5">
+                  <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-100/70 dark:bg-zinc-950 p-2 flex items-center justify-center relative min-h-[220px] max-h-[320px] overflow-hidden">
+                    {/* Umschalter Aufbereitet | Original oben rechts (nur bei Nicht-PDF) */}
+                    {!isPdf && (
+                      <div
+                        id="drawer-preview-mode-toggle"
+                        className="absolute top-3 right-3 z-20 flex items-center bg-white/95 dark:bg-zinc-900/95 backdrop-blur-xs p-0.5 rounded-xl border border-zinc-200/90 dark:border-zinc-800 shadow-sm text-xs font-medium"
+                      >
+                        <button
+                          type="button"
+                          onClick={() => setPreviewMode('processed')}
+                          className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer ${
+                            previewMode === 'processed'
+                              ? 'bg-blue-600 text-white font-semibold shadow-xs'
+                              : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white'
+                          }`}
+                        >
+                          Aufbereitet
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setPreviewMode('original')}
+                          className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer ${
+                            previewMode === 'original'
+                              ? 'bg-blue-600 text-white font-semibold shadow-xs'
+                              : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white'
+                          }`}
+                        >
+                          Original
+                        </button>
+                      </div>
+                    )}
+
+                    {isPdf ? (
+                      <iframe
+                        src={`/api/documents/${localDoc.id}/pdf`}
+                        title="PDF Vorschau"
+                        className="w-full h-64 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white"
+                      />
+                    ) : (
+                      <img
+                        key={`${localDoc.id}-${previewMode}-${localDoc.updated_at}`}
+                        src={displayedImgUrl}
+                        alt={localDoc.original_name}
+                        className="max-h-64 object-contain rounded-lg shadow-xs"
+                      />
+                    )}
+
+                    {/* Overlay bei laufender Aufbereitung */}
+                    {(localDoc.status === 'processing' || localDoc.status === 'queued') && (
+                      <div className="absolute inset-0 bg-black/45 backdrop-blur-xs flex flex-col items-center justify-center text-white rounded-xl z-30">
+                        <Loader2 className="w-8 h-8 animate-spin mb-2 text-blue-400" />
+                        <p className="text-xs font-semibold">Wird aufbereitet…</p>
+                      </div>
+                    )}
+
+                    <a
+                      href={displayedImgUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="absolute bottom-3 right-3 z-10 bg-white/90 dark:bg-zinc-800/90 text-zinc-700 dark:text-zinc-200 px-2.5 py-1 rounded-lg text-xs font-medium shadow-xs hover:bg-white dark:hover:bg-zinc-700 flex items-center gap-1.5 transition-colors cursor-pointer"
                     >
-                      <RotateCcw className="w-3.5 h-3.5" />
-                      <span>↺ 90°</span>
-                    </button>
-                    <button
-                      type="button"
-                      id="drawer-quick-rotate-cw"
-                      disabled={localDoc.status === 'processing' || localDoc.status === 'queued'}
-                      onClick={() => handleRotate('cw')}
-                      className="px-3 py-1.5 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 hover:bg-zinc-50 dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-200 text-xs font-semibold flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-                      title="Im Uhrzeigersinn um 90° drehen (↻ 90°)"
-                    >
-                      <RotateCw className="w-3.5 h-3.5" />
-                      <span>↻ 90°</span>
-                    </button>
+                      <ExternalLink className="w-3.5 h-3.5" />
+                      Vollbild
+                    </a>
                   </div>
 
-                  {/* Farbmodus */}
-                  <div className="flex items-center rounded-xl bg-zinc-200/80 dark:bg-zinc-800 p-0.5 text-xs font-medium">
-                    <button
-                      type="button"
-                      id="drawer-quick-mode-bw"
-                      disabled={localDoc.status === 'processing' || localDoc.status === 'queued'}
-                      onClick={() => handleColorMode('bw')}
-                      className={`px-3 py-1 rounded-lg transition-all cursor-pointer ${
-                        localDoc.color_mode === 'bw'
-                          ? 'bg-white dark:bg-zinc-900 text-zinc-900 dark:text-white font-semibold shadow-xs'
-                          : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white'
-                      } disabled:opacity-40 disabled:cursor-not-allowed`}
-                    >
-                      S/W
-                    </button>
-                    <button
-                      type="button"
-                      id="drawer-quick-mode-gray"
-                      disabled={localDoc.status === 'processing' || localDoc.status === 'queued'}
-                      onClick={() => handleColorMode('gray')}
-                      className={`px-3 py-1 rounded-lg transition-all cursor-pointer ${
-                        localDoc.color_mode === 'gray'
-                          ? 'bg-white dark:bg-zinc-900 text-zinc-900 dark:text-white font-semibold shadow-xs'
-                          : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white'
-                      } disabled:opacity-40 disabled:cursor-not-allowed`}
-                    >
-                      Grau
-                    </button>
-                    <button
-                      type="button"
-                      id="drawer-quick-mode-color"
-                      disabled={localDoc.status === 'processing' || localDoc.status === 'queued'}
-                      onClick={() => handleColorMode('color')}
-                      className={`px-3 py-1 rounded-lg transition-all cursor-pointer ${
-                        localDoc.color_mode === 'color'
-                          ? 'bg-white dark:bg-zinc-900 text-zinc-900 dark:text-white font-semibold shadow-xs'
-                          : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white'
-                      } disabled:opacity-40 disabled:cursor-not-allowed`}
-                    >
-                      Farbe
-                    </button>
+                  {/* Schnellaktionen unter der Vorschau (Drehung + Farbmodus) */}
+                  {!isPdf && (
+                    <div className="flex flex-wrap items-center justify-between gap-2 px-1">
+                      {/* Drehung */}
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          id="drawer-quick-rotate-ccw"
+                          disabled={localDoc.status === 'processing' || localDoc.status === 'queued'}
+                          onClick={() => handleRotate('ccw')}
+                          className="px-3 py-1.5 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 hover:bg-zinc-50 dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-200 text-xs font-semibold flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                          title="Gegen den Uhrzeigersinn um 90° drehen (↺ 90°)"
+                        >
+                          <RotateCcw className="w-3.5 h-3.5" />
+                          <span>↺ 90°</span>
+                        </button>
+                        <button
+                          type="button"
+                          id="drawer-quick-rotate-cw"
+                          disabled={localDoc.status === 'processing' || localDoc.status === 'queued'}
+                          onClick={() => handleRotate('cw')}
+                          className="px-3 py-1.5 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 hover:bg-zinc-50 dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-200 text-xs font-semibold flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                          title="Im Uhrzeigersinn um 90° drehen (↻ 90°)"
+                        >
+                          <RotateCw className="w-3.5 h-3.5" />
+                          <span>↻ 90°</span>
+                        </button>
+                      </div>
+
+                      {/* Farbmodus */}
+                      <div className="flex items-center rounded-xl bg-zinc-200/80 dark:bg-zinc-800 p-0.5 text-xs font-medium">
+                        <button
+                          type="button"
+                          id="drawer-quick-mode-bw"
+                          disabled={localDoc.status === 'processing' || localDoc.status === 'queued'}
+                          onClick={() => handleColorMode('bw')}
+                          className={`px-3 py-1 rounded-lg transition-all cursor-pointer ${
+                            localDoc.color_mode === 'bw'
+                              ? 'bg-white dark:bg-zinc-900 text-zinc-900 dark:text-white font-semibold shadow-xs'
+                              : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white'
+                          } disabled:opacity-40 disabled:cursor-not-allowed`}
+                        >
+                          S/W
+                        </button>
+                        <button
+                          type="button"
+                          id="drawer-quick-mode-gray"
+                          disabled={localDoc.status === 'processing' || localDoc.status === 'queued'}
+                          onClick={() => handleColorMode('gray')}
+                          className={`px-3 py-1 rounded-lg transition-all cursor-pointer ${
+                            localDoc.color_mode === 'gray'
+                              ? 'bg-white dark:bg-zinc-900 text-zinc-900 dark:text-white font-semibold shadow-xs'
+                              : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white'
+                          } disabled:opacity-40 disabled:cursor-not-allowed`}
+                        >
+                          Grau
+                        </button>
+                        <button
+                          type="button"
+                          id="drawer-quick-mode-color"
+                          disabled={localDoc.status === 'processing' || localDoc.status === 'queued'}
+                          onClick={() => handleColorMode('color')}
+                          className={`px-3 py-1 rounded-lg transition-all cursor-pointer ${
+                            localDoc.color_mode === 'color'
+                              ? 'bg-white dark:bg-zinc-900 text-zinc-900 dark:text-white font-semibold shadow-xs'
+                              : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white'
+                          } disabled:opacity-40 disabled:cursor-not-allowed`}
+                        >
+                          Farbe
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Tab 2: PDF (eingebettetes PDF/A aus /api/documents/:id/pdf) */}
+              {activeTab === 'pdf' && (
+                <div className="space-y-2">
+                  <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-100/70 dark:bg-zinc-950 p-2 flex flex-col relative h-[360px] overflow-hidden">
+                    {localDoc.pdf_path ? (
+                      <iframe
+                        id="drawer-pdf-frame"
+                        src={`/api/documents/${localDoc.id}/pdf`}
+                        title="PDF Dokument"
+                        className="w-full h-full rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white"
+                      />
+                    ) : (
+                      <div className="flex flex-col items-center justify-center h-full text-zinc-400 text-center p-6 space-y-2">
+                        <FileText className="w-10 h-10 opacity-40 mb-1" />
+                        <p className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
+                          PDF wird erzeugt…
+                        </p>
+                        <p className="text-[11px] text-zinc-500 max-w-xs leading-relaxed">
+                          Sobald die Texterkennung abgeschlossen ist, wird das durchsuchbare PDF/A hier angezeigt.
+                        </p>
+                      </div>
+                    )}
+
+                    {localDoc.pdf_path && (
+                      <a
+                        id="drawer-open-pdf-external"
+                        href={`/api/documents/${localDoc.id}/pdf`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="absolute bottom-3 right-3 z-10 bg-white/95 dark:bg-zinc-800/95 text-zinc-700 dark:text-zinc-200 px-2.5 py-1 rounded-lg text-xs font-medium shadow-xs hover:bg-white dark:hover:bg-zinc-700 flex items-center gap-1.5 transition-colors cursor-pointer border border-zinc-200 dark:border-zinc-700"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5" />
+                        Im neuen Tab öffnen
+                      </a>
+                    )}
                   </div>
+                </div>
+              )}
+
+              {/* Tab 3: Text (erkannter OCR-Text, monospace & kopierbar) */}
+              {activeTab === 'text' && (
+                <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 p-3.5 flex flex-col relative min-h-[260px] max-h-[380px] space-y-2.5">
+                  <div className="flex items-center justify-between pb-2 border-b border-zinc-100 dark:border-zinc-800">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-semibold text-zinc-800 dark:text-zinc-200">
+                        Erkannter Text (OCR)
+                      </span>
+                      {localDoc.ocr_text && (
+                        <span className="text-[10px] text-zinc-400 font-mono">
+                          {localDoc.ocr_text.length} Zeichen
+                        </span>
+                      )}
+                    </div>
+                    {localDoc.ocr_text && (
+                      <button
+                        type="button"
+                        id="drawer-copy-text-btn"
+                        onClick={handleCopyOcrText}
+                        className="px-2.5 py-1 text-xs font-medium rounded-lg border border-zinc-200 dark:border-zinc-800 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center gap-1.5 transition-colors cursor-pointer"
+                        title="Text in Zwischenablage kopieren"
+                      >
+                        {copied ? (
+                          <>
+                            <Check className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                            <span className="text-emerald-600 dark:text-emerald-400 font-semibold">Kopiert!</span>
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="w-3.5 h-3.5" />
+                            <span>Kopieren</span>
+                          </>
+                        )}
+                      </button>
+                    )}
+                  </div>
+
+                  {localDoc.ocr_text ? (
+                    <pre
+                      id="drawer-ocr-text-display"
+                      className="flex-1 overflow-y-auto font-mono text-xs text-zinc-800 dark:text-zinc-200 whitespace-pre-wrap select-all leading-relaxed p-3 bg-zinc-50 dark:bg-zinc-900/60 rounded-lg border border-zinc-200/80 dark:border-zinc-800/80"
+                    >
+                      {localDoc.ocr_text}
+                    </pre>
+                  ) : (
+                    <div className="flex flex-col items-center justify-center flex-1 text-center p-6 text-zinc-400">
+                      <AlignLeft className="w-8 h-8 opacity-40 mb-2" />
+                      <p className="text-xs font-medium text-zinc-600 dark:text-zinc-400">
+                        Kein Text erkannt oder Texterkennung läuft noch.
+                      </p>
+                      <p className="text-[11px] text-zinc-400 dark:text-zinc-500 mt-1">
+                        Sobald die OCR abgeschlossen ist, erscheint der extrahierte Text hier.
+                      </p>
+                    </div>
+                  )}
                 </div>
               )}
             </div>

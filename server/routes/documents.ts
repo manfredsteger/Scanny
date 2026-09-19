@@ -6,6 +6,7 @@ import sharp from 'sharp';
 import { getDb, paths } from '../db.js';
 import { ingestFile } from '../pipeline/ingest.js';
 import { documentQueue } from '../pipeline/queue.js';
+import { determineArchivePdfPath, moveOrCopySync } from '../pipeline/ocr.js';
 
 export const documentsRouter = Router();
 
@@ -162,10 +163,23 @@ documentsRouter.get('/stats', (req: Request, res: Response) => {
 documentsRouter.get('/documents', (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const { status, folder_id, batch } = req.query;
+    const { status, folder_id, batch, q } = req.query;
 
     const conditions: string[] = [];
     const params: any[] = [];
+
+    if (q && typeof q === 'string' && q.trim()) {
+      const cleanQ = q.trim();
+      const ftsTerm = cleanQ.replace(/['"*]/g, '') + '*';
+      const likeTerm = `%${cleanQ}%`;
+      conditions.push(`(
+        d.id IN (SELECT rowid FROM documents_fts WHERE documents_fts MATCH ?)
+        OR d.title LIKE ?
+        OR d.sender LIKE ?
+        OR d.ocr_text LIKE ?
+      )`);
+      params.push(ftsTerm, likeTerm, likeTerm, likeTerm);
+    }
 
     if (status && typeof status === 'string') {
       const statusList = status.split(',').map((s) => s.trim());
@@ -363,6 +377,41 @@ documentsRouter.get('/documents/:id/scan', (req: Request, res: Response) => {
   }
 });
 
+// GET /api/documents/:id/pdf -> Liefert das durchsuchbare PDF/A inline für die Vorschau im Browser
+documentsRouter.get('/documents/:id/pdf', (req: Request, res: Response) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) {
+      return res.status(400).json({ error: 'Ungültige Dokument-ID.' });
+    }
+
+    const db = getDb();
+    const doc = db
+      .prepare('SELECT id, title, original_name, pdf_path FROM documents WHERE id = ?')
+      .get(id) as any;
+
+    if (!doc) {
+      return res.status(404).json({ error: 'Dokument nicht gefunden.' });
+    }
+
+    if (!doc.pdf_path || !fs.existsSync(doc.pdf_path)) {
+      return res.status(404).json({ error: 'Kein PDF vorhanden oder wird noch erzeugt.' });
+    }
+
+    const filename = path.basename(doc.pdf_path);
+    const encodedFilename = encodeURIComponent(filename).replace(/['()]/g, escape).replace(/\*/g, '%2A');
+    const asciiFallback = filename.replace(/[^\x20-\x7E]/g, '_');
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="${asciiFallback}"; filename*=UTF-8''${encodedFilename}`);
+    res.setHeader('Cache-Control', 'no-cache');
+    res.sendFile(doc.pdf_path);
+  } catch (error: any) {
+    console.error('Fehler beim Ausliefern des PDFs:', error);
+    res.status(500).json({ error: 'PDF konnte nicht ausgeliefert werden.' });
+  }
+});
+
 // GET /api/documents/:id/work-preview -> DATA_DIR/work/<id>.jpg, verkleinert auf max. 1600 px, Cache-Control no-cache
 documentsRouter.get('/documents/:id/work-preview', async (req: Request, res: Response) => {
   try {
@@ -475,6 +524,48 @@ documentsRouter.patch('/documents/:id', async (req: Request, res: Response) => {
       finalStatus = finalFolderId !== null ? 'filed' : 'inbox';
     }
 
+    // Ablage-PDF im Dateisystem verschieben / umbenennen, falls vorhanden und sich Metadaten geändert haben
+    let finalPdfPath = existing.pdf_path;
+    if (
+      existing.pdf_path &&
+      fs.existsSync(existing.pdf_path) &&
+      (folder_id !== undefined || title !== undefined || doc_date !== undefined)
+    ) {
+      let targetDir: string;
+      if (finalFolderId) {
+        const folderRow = db.prepare('SELECT name FROM folders WHERE id = ?').get(finalFolderId) as
+          | { name: string }
+          | undefined;
+        targetDir =
+          folderRow && folderRow.name
+            ? path.join(paths.archiveDir, folderRow.name)
+            : path.join(paths.archiveDir, '_Eingang');
+      } else {
+        targetDir = path.join(paths.archiveDir, '_Eingang');
+      }
+
+      if (!fs.existsSync(targetDir)) {
+        fs.mkdirSync(targetDir, { recursive: true });
+      }
+
+      const dateStr =
+        finalDocDate && /^\d{4}-\d{2}-\d{2}$/.test(finalDocDate.trim())
+          ? finalDocDate.trim()
+          : existing.created_at
+          ? existing.created_at.slice(0, 10)
+          : new Date().toISOString().slice(0, 10);
+
+      const titleToUse =
+        (finalTitle && finalTitle.trim()) ||
+        (existing.original_name ? path.parse(existing.original_name).name : 'Beleg');
+
+      const newPdfPath = determineArchivePdfPath(targetDir, dateStr, titleToUse, existing.pdf_path);
+      if (newPdfPath !== existing.pdf_path) {
+        moveOrCopySync(existing.pdf_path, newPdfPath);
+        finalPdfPath = newPdfPath;
+      }
+    }
+
     db.prepare(`
       UPDATE documents
       SET title = ?,
@@ -488,6 +579,7 @@ documentsRouter.patch('/documents/:id', async (req: Request, res: Response) => {
           color_mode = ?,
           rotation = ?,
           corners = ?,
+          pdf_path = ?,
           updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
       WHERE id = ?
     `).run(
@@ -502,6 +594,7 @@ documentsRouter.patch('/documents/:id', async (req: Request, res: Response) => {
       finalColorMode,
       finalRotation,
       finalCorners,
+      finalPdfPath,
       id
     );
 
