@@ -1,0 +1,367 @@
+import React, { useState, useRef } from 'react';
+import {
+  UploadCloud,
+  Inbox,
+  Folder as FolderIcon,
+  RotateCcw,
+  Loader2,
+  AlertCircle,
+  AlertTriangle,
+  FileText,
+  CheckCircle2,
+  Calendar,
+  Sparkles,
+  ArrowRight,
+  Plus,
+} from 'lucide-react';
+import { ScannyDocument, SystemPaths, formatDocumentType } from '../types';
+
+interface InboxViewProps {
+  documents: ScannyDocument[];
+  paths: SystemPaths | null;
+  onOpenImportDialog: (docs?: ScannyDocument[]) => void;
+  onSelectDocument: (doc: ScannyDocument) => void;
+  onUploadFiles: (files: FileList | File[]) => Promise<void>;
+  onRetryDocument: (id: number) => Promise<void>;
+  isUploading?: boolean;
+}
+
+export function InboxView({
+  documents,
+  paths,
+  onOpenImportDialog,
+  onSelectDocument,
+  onUploadFiles,
+  onRetryDocument,
+  isUploading = false,
+}: InboxViewProps) {
+  const [isDropActive, setIsDropActive] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const displayWatchDir = paths?.hostWatchDir || paths?.watchDir;
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDropActive(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDropActive(false);
+  };
+
+  const handleDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDropActive(false);
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      await onUploadFiles(e.dataTransfer.files);
+    }
+  };
+
+  const handleFileInputChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files.length > 0) {
+      await onUploadFiles(e.target.files);
+      e.target.value = '';
+    }
+  };
+
+  const formatDate = (isoString: string) => {
+    if (!isoString) return '';
+    try {
+      const d = new Date(isoString);
+      return d.toLocaleDateString('de-DE', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+      });
+    } catch {
+      return isoString.slice(0, 10);
+    }
+  };
+
+  const formatAmount = (cents: number | null) => {
+    if (cents === null || cents === undefined) return null;
+    return (cents / 100).toLocaleString('de-DE', {
+      style: 'currency',
+      currency: 'EUR',
+    });
+  };
+
+  return (
+    <div id="inbox-view" className="p-6 md:p-8 max-w-7xl mx-auto space-y-6">
+      {/* Verstecktes Datei-Input */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        accept=".jpg,.jpeg,.png,.heic,.heif,.pdf"
+        className="hidden"
+        onChange={handleFileInputChange}
+      />
+
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-zinc-200 dark:border-zinc-800">
+        <div>
+          <h2 className="text-xl font-bold tracking-tight text-zinc-900 dark:text-white flex items-center gap-2.5">
+            Eingang
+            <span className="text-xs px-2.5 py-0.5 rounded-full bg-blue-100 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 font-semibold">
+              {documents.length}
+            </span>
+          </h2>
+          <p className="text-sm text-zinc-500 dark:text-zinc-400 mt-0.5">
+            Neue Belege erfassen, prüfen und für die Archivierung vorbereiten.
+          </p>
+        </div>
+
+        <div className="flex items-center gap-2.5">
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={isUploading}
+            className="px-3.5 py-2 rounded-xl text-xs font-semibold border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-300 transition-colors cursor-pointer flex items-center gap-1.5"
+          >
+            <Plus className="w-4 h-4" />
+            Dateien wählen
+          </button>
+
+          <button
+            type="button"
+            id="inbox-check-all-btn"
+            onClick={() => onOpenImportDialog(documents)}
+            disabled={documents.length === 0}
+            className="px-4 py-2 rounded-xl text-xs font-semibold bg-blue-600 hover:bg-blue-700 disabled:opacity-40 disabled:hover:bg-blue-600 text-white transition-colors cursor-pointer flex items-center gap-1.5 shadow-xs"
+          >
+            <Sparkles className="w-3.5 h-3.5" />
+            Alle prüfen
+          </button>
+        </div>
+      </div>
+
+      {/* Dropzone am oberen Rand */}
+      <div
+        id="inbox-dropzone"
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+        onClick={() => fileInputRef.current?.click()}
+        className={`relative border-2 border-dashed rounded-2xl p-6 md:p-8 text-center transition-all cursor-pointer select-none ${
+          isDropActive
+            ? 'border-blue-500 bg-blue-50/60 dark:bg-blue-950/30 scale-[1.005]'
+            : 'border-zinc-300 dark:border-zinc-700/80 bg-white dark:bg-zinc-900/40 hover:border-zinc-400 dark:hover:border-zinc-600'
+        }`}
+      >
+        <div className="max-w-md mx-auto flex flex-col items-center">
+          <div className="w-10 h-10 rounded-xl bg-blue-50 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400 flex items-center justify-center mb-2 shadow-xs">
+            {isUploading ? (
+              <Loader2 className="w-5 h-5 animate-spin" />
+            ) : (
+              <UploadCloud className="w-5 h-5" />
+            )}
+          </div>
+          <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+            {isUploading ? 'Dateien werden importiert…' : 'Dateien hierher ziehen oder klicken'}
+          </h3>
+          <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1 leading-relaxed">
+            iPhone-Fotos (HEIC, JPG), PNG oder PDF-Dokumente
+          </p>
+          {displayWatchDir && (
+            <div className="mt-2 text-[11px] text-zinc-400 dark:text-zinc-500 flex items-center gap-1">
+              <span>oder Upload-Ordner nutzen:</span>
+              <code className="px-1.5 py-0.5 bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 rounded font-mono">
+                {displayWatchDir}
+              </code>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Dokumente Kachelraster */}
+      {documents.length === 0 ? (
+        <div className="py-16 text-center border border-zinc-200 dark:border-zinc-800 rounded-2xl bg-white dark:bg-zinc-900/30 p-8">
+          <div className="w-12 h-12 rounded-2xl bg-zinc-100 dark:bg-zinc-800 text-zinc-400 flex items-center justify-center mx-auto mb-3">
+            <CheckCircle2 className="w-6 h-6 text-emerald-500" />
+          </div>
+          <h3 className="text-base font-semibold text-zinc-900 dark:text-white">
+            Eingang ist leer
+          </h3>
+          <p className="text-xs text-zinc-500 dark:text-zinc-400 max-w-sm mx-auto mt-1">
+            Alle Belege wurden geprüft und abgelegt. Ziehe neue Dateien hierher oder lege sie in den Upload-Ordner auf deinem Mac.
+          </p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+          {documents.map((doc) => {
+            const isProcessing = doc.status === 'processing' || doc.status === 'queued';
+            const isError = doc.status === 'error';
+            const formattedAmount = formatAmount(doc.amount_cents);
+
+            // Kachel bei Fehler
+            if (isError) {
+              return (
+                <div
+                  key={doc.id}
+                  id={`doc-card-${doc.id}`}
+                  className="rounded-2xl border border-red-200 dark:border-red-900/60 bg-red-50/50 dark:bg-red-950/20 p-4 flex flex-col justify-between min-h-[260px] shadow-xs"
+                >
+                  <div>
+                    <div className="flex items-center justify-between text-red-600 dark:text-red-400 mb-2">
+                      <div className="flex items-center gap-1.5 text-xs font-semibold">
+                        <AlertCircle className="w-4 h-4" />
+                        <span>Fehler beim Erfassen</span>
+                      </div>
+                      <span className="text-[10px] uppercase font-mono px-1.5 py-0.5 rounded bg-red-100 dark:bg-red-900/50">
+                        {doc.source}
+                      </span>
+                    </div>
+
+                    <p className="text-xs font-semibold text-zinc-900 dark:text-zinc-100 truncate">
+                      {doc.original_name}
+                    </p>
+                    <p className="text-[11px] text-red-600 dark:text-red-400 mt-2 line-clamp-3 bg-white/60 dark:bg-zinc-900/60 p-2 rounded-xl font-mono">
+                      {doc.error || 'Unbekannter Fehler'}
+                    </p>
+                  </div>
+
+                  <div className="pt-3 border-t border-red-200 dark:border-red-900/40 flex items-center justify-between">
+                    <span className="text-[10px] text-zinc-400">
+                      {formatDate(doc.created_at)}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => onRetryDocument(doc.id)}
+                      className="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-medium flex items-center gap-1.5 transition-colors cursor-pointer shadow-xs"
+                    >
+                      <RotateCcw className="w-3 h-3" />
+                      Erneut versuchen
+                    </button>
+                  </div>
+                </div>
+              );
+            }
+
+            // Kachel bei laufender Verarbeitung
+            if (isProcessing) {
+              return (
+                <div
+                  key={doc.id}
+                  id={`doc-card-${doc.id}`}
+                  className="rounded-2xl border border-blue-200 dark:border-blue-900/60 bg-blue-50/40 dark:bg-blue-950/20 p-4 flex flex-col justify-between min-h-[260px] shadow-xs"
+                >
+                  <div className="flex-1 flex flex-col items-center justify-center text-center p-4">
+                    <div className="w-12 h-12 rounded-2xl bg-blue-100 dark:bg-blue-900/50 text-blue-600 dark:text-blue-400 flex items-center justify-center mb-3">
+                      <Loader2 className="w-6 h-6 animate-spin" />
+                    </div>
+                    <p className="text-xs font-semibold text-zinc-900 dark:text-zinc-100">
+                      Wird aufbereitet…
+                    </p>
+                    <p className="text-[11px] text-zinc-500 dark:text-zinc-400 mt-1 truncate max-w-full">
+                      {doc.original_name}
+                    </p>
+                  </div>
+
+                  <div className="pt-3 border-t border-blue-200 dark:border-blue-900/40 flex items-center justify-between text-[11px] text-zinc-400">
+                    <span className="flex items-center gap-1">
+                      {doc.source === 'folder' ? (
+                        <FolderIcon className="w-3 h-3" />
+                      ) : (
+                        <UploadCloud className="w-3 h-3" />
+                      )}
+                      {doc.source === 'folder' ? 'Upload-Ordner' : 'Web-Upload'}
+                    </span>
+                    <span>{formatDate(doc.created_at)}</span>
+                  </div>
+                </div>
+              );
+            }
+
+            // Normale Kachel (bereit zur Prüfung oder bereits im Eingang)
+            return (
+              <div
+                key={doc.id}
+                id={`doc-card-${doc.id}`}
+                onClick={() => onSelectDocument(doc)}
+                className="group relative rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 hover:border-blue-400 dark:hover:border-blue-600/80 transition-all cursor-pointer overflow-hidden flex flex-col justify-between shadow-xs hover:shadow-md"
+              >
+                {/* Vorschaubild */}
+                <div className="h-44 bg-zinc-100 dark:bg-zinc-950/80 flex items-center justify-center overflow-hidden relative border-b border-zinc-100 dark:border-zinc-800/80">
+                  {doc.thumb_path ? (
+                    <img
+                      src={`/api/documents/${doc.id}/thumb?v=${encodeURIComponent(doc.updated_at || '')}`}
+                      alt={doc.title || doc.original_name}
+                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
+                    />
+                  ) : (
+                    <div className="flex flex-col items-center justify-center text-zinc-400 dark:text-zinc-500">
+                      <FileText className="w-10 h-10 mb-1 opacity-60" />
+                      <span className="text-[10px] uppercase font-mono tracking-wider">
+                        {doc.original_name.split('.').pop()}
+                      </span>
+                    </div>
+                  )}
+
+                  {/* Betrag Badge oben rechts falls vorhanden */}
+                  {formattedAmount && (
+                    <div className="absolute top-2.5 right-2.5 bg-zinc-900/80 backdrop-blur-xs text-white text-[11px] font-mono font-medium px-2 py-0.5 rounded-lg shadow-xs">
+                      {formattedAmount}
+                    </div>
+                  )}
+
+                  {/* Duplikat-Badge */}
+                  {doc.duplicate_of_id && (
+                    <div
+                      className="absolute top-2.5 left-10 bg-amber-500/90 text-white text-[10px] font-semibold px-1.5 py-0.5 rounded-md shadow-xs flex items-center gap-1"
+                      title={`Vermutlich doppelt zu »${doc.duplicate_of_title || 'Dokument #' + doc.duplicate_of_id}«`}
+                    >
+                      <span>Doppelt?</span>
+                    </div>
+                  )}
+
+                  {/* Quelle oben links */}
+                  <div
+                    className="absolute top-2.5 left-2.5 bg-white/90 dark:bg-zinc-900/90 text-zinc-600 dark:text-zinc-300 p-1 rounded-md shadow-xs"
+                    title={doc.source === 'folder' ? 'Aus Upload-Ordner' : 'Per Web hochgeladen'}
+                  >
+                    {doc.source === 'folder' ? (
+                      <FolderIcon className="w-3 h-3 text-amber-500" />
+                    ) : (
+                      <UploadCloud className="w-3 h-3 text-blue-500" />
+                    )}
+                  </div>
+                </div>
+
+                {/* Details unter dem Bild */}
+                <div className="p-3.5 flex-1 flex flex-col justify-between">
+                  <div>
+                    <h4 className="text-xs font-bold text-zinc-900 dark:text-zinc-100 truncate group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">
+                      {doc.title || doc.original_name}
+                    </h4>
+
+                    <div className="flex items-center justify-between text-[11px] text-zinc-500 dark:text-zinc-400 mt-1">
+                      <span className="truncate">{doc.sender || formatDocumentType(doc.doc_type) || 'Beleg'}</span>
+                      {doc.doc_date && (
+                        <span className="font-mono shrink-0 ml-1 text-zinc-400">
+                          {formatDate(doc.doc_date)}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Fußzeile mit Erfassungsdatum */}
+                  <div className="mt-3 pt-2.5 border-t border-zinc-100 dark:border-zinc-800/80 flex items-center justify-between text-[10px] text-zinc-400">
+                    <span className="flex items-center gap-1">
+                      <Calendar className="w-3 h-3" />
+                      Erfasst: {formatDate(doc.created_at)}
+                    </span>
+                    <span className="text-blue-600 dark:text-blue-400 font-medium group-hover:translate-x-0.5 transition-transform flex items-center gap-0.5">
+                      Prüfen <ArrowRight className="w-3 h-3" />
+                    </span>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}

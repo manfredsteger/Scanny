@@ -1,0 +1,15 @@
+node_modules/
+build/
+dist/
+server/dist/
+data/
+scanny/
+coverage/
+.DS_Store
+*.log
+.env
+.env.local
+!.env.example
+bun.lock
+bun.lockb
+

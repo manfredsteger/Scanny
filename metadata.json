@@ -1,0 +1,6 @@
+{
+  "name": "Scanny",
+  "description": "Selbst gehostete Web-App für das Home Office: Belege erfassen, organisieren und archivieren.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
