@@ -8,7 +8,8 @@
     "build": "vite build && tsc -p tsconfig.server.json",
     "start": "node server/dist/index.js",
     "clean": "rm -rf dist server/dist data/ scanny/",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "test": "vitest run"
   },
   "dependencies": {
     "better-sqlite3": "^13.0.3",
@@ -34,6 +35,7 @@
     "tailwindcss": "^4.3.3",
     "tsx": "^4.21.0",
     "typescript": "^7.0.2",
-    "vite": "^8.3.0"
+    "vite": "^8.3.0",
+    "vitest": "^5.0.1"
   }
 }

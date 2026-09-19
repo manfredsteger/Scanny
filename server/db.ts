@@ -311,4 +311,22 @@ function migrate(db: Database.Database): void {
     });
     runMigration5();
   }
+
+  if (currentVersion < 6) {
+    // Migration 6: Erkennungsergebnis (Typ/Datum/Betrag/Absender + Fundstellen) als JSON, auto_file-Einstellung
+    const runMigration6 = db.transaction(() => {
+      const docTableInfo = db.prepare(`PRAGMA table_info(documents)`).all() as { name: string }[];
+      const colNames = new Set(docTableInfo.map((c) => c.name));
+
+      if (!colNames.has('extraction')) {
+        db.exec(`ALTER TABLE documents ADD COLUMN extraction TEXT NULL;`);
+      }
+
+      db.exec(`
+        INSERT OR IGNORE INTO settings (key, value) VALUES ('auto_file', 'false');
+        PRAGMA user_version = 6;
+      `);
+    });
+    runMigration6();
+  }
 }

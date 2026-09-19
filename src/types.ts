@@ -151,9 +151,67 @@ export interface ScannyDocument {
   corners?: string | null;
   detected?: number | boolean | null;
   ocr_text: string | null;
+  extraction?: string | null;
   error: string | null;
   created_at: string;
   updated_at: string;
+}
+
+/** Ergebnis der automatischen Erkennung (documents.extraction, JSON). Spans = [start, end] im ocr_text. */
+export interface DocumentExtraction {
+  type: string;
+  typeConfidence: number;
+  typeRunnerUp: string | null;
+  typeFallback: boolean;
+  date: string | null;
+  dateSpan: [number, number] | null;
+  amountCents: number | null;
+  amountSpan: [number, number] | null;
+  sender: string | null;
+  senderSpan: [number, number] | null;
+  title: string | null;
+  confidence: number;
+  layout: string | null;
+}
+
+/** Formularfeld, dessen Fundstelle im Text hervorgehoben werden soll. */
+export type HighlightField = 'doc_date' | 'amount_cents' | 'sender' | null;
+
+export function parseExtraction(doc: Pick<ScannyDocument, 'extraction'> | null | undefined): DocumentExtraction | null {
+  if (!doc?.extraction) return null;
+  try {
+    const parsed = JSON.parse(doc.extraction);
+    return parsed && typeof parsed === 'object' ? (parsed as DocumentExtraction) : null;
+  } catch {
+    return null;
+  }
+}
+
+export function highlightSpan(
+  extraction: DocumentExtraction | null,
+  field: HighlightField
+): [number, number] | null {
+  if (!extraction || !field) return null;
+  if (field === 'doc_date') return extraction.dateSpan;
+  if (field === 'amount_cents') return extraction.amountSpan;
+  if (field === 'sender') return extraction.senderSpan;
+  return null;
+}
+
+/** Ordner-Vorschlag zum Datum: zuerst Steuerjahr-Ordner des Jahres, sonst Jahr-Ordner. */
+export function suggestFolderId(folders: Folder[], isoDate: string | null | undefined): number | null {
+  if (!isoDate) return null;
+  const year = parseInt(isoDate.slice(0, 4), 10);
+  if (isNaN(year)) return null;
+  const steuer = folders.find((f) => f.kind === 'steuerjahr' && f.year === year);
+  if (steuer) return steuer.id;
+  const jahr = folders.find((f) => f.kind === 'jahr' && f.year === year);
+  return jahr ? jahr.id : null;
+}
+
+export function formatCentsDe(cents: number | null | undefined): string {
+  if (cents === null || cents === undefined) return '';
+  return (cents / 100).toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 

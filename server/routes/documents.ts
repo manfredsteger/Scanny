@@ -6,7 +6,7 @@ import sharp from 'sharp';
 import { getDb, paths } from '../db.js';
 import { ingestFile } from '../pipeline/ingest.js';
 import { documentQueue } from '../pipeline/queue.js';
-import { determineArchivePdfPath, localDateString, moveOrCopySync } from '../pipeline/ocr.js';
+import { syncArchivePdf } from '../pipeline/ocr.js';
 
 export const documentsRouter = Router();
 
@@ -531,46 +531,6 @@ documentsRouter.patch('/documents/:id', async (req: Request, res: Response) => {
       finalStatus = finalFolderId !== null ? 'filed' : 'inbox';
     }
 
-    // Ablage-PDF im Dateisystem verschieben / umbenennen, falls vorhanden und sich Metadaten geändert haben
-    let finalPdfPath = existing.pdf_path;
-    if (
-      existing.pdf_path &&
-      fs.existsSync(existing.pdf_path) &&
-      (folder_id !== undefined || title !== undefined || doc_date !== undefined)
-    ) {
-      let targetDir: string;
-      if (finalFolderId) {
-        const folderRow = db.prepare('SELECT name FROM folders WHERE id = ?').get(finalFolderId) as
-          | { name: string }
-          | undefined;
-        targetDir =
-          folderRow && folderRow.name
-            ? path.join(paths.archiveDir, folderRow.name)
-            : path.join(paths.archiveDir, '_Eingang');
-      } else {
-        targetDir = path.join(paths.archiveDir, '_Eingang');
-      }
-
-      if (!fs.existsSync(targetDir)) {
-        fs.mkdirSync(targetDir, { recursive: true });
-      }
-
-      const dateStr =
-        finalDocDate && /^\d{4}-\d{2}-\d{2}$/.test(finalDocDate.trim())
-          ? finalDocDate.trim()
-          : localDateString(existing.created_at);
-
-      const titleToUse =
-        (finalTitle && finalTitle.trim()) ||
-        (existing.original_name ? path.parse(existing.original_name).name : 'Beleg');
-
-      const newPdfPath = determineArchivePdfPath(targetDir, dateStr, titleToUse, existing.pdf_path);
-      if (newPdfPath !== existing.pdf_path) {
-        moveOrCopySync(existing.pdf_path, newPdfPath);
-        finalPdfPath = newPdfPath;
-      }
-    }
-
     db.prepare(`
       UPDATE documents
       SET title = ?,
@@ -584,7 +544,6 @@ documentsRouter.patch('/documents/:id', async (req: Request, res: Response) => {
           color_mode = ?,
           rotation = ?,
           corners = ?,
-          pdf_path = ?,
           updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
       WHERE id = ?
     `).run(
@@ -599,9 +558,17 @@ documentsRouter.patch('/documents/:id', async (req: Request, res: Response) => {
       finalColorMode,
       finalRotation,
       finalCorners,
-      finalPdfPath,
       id
     );
+
+    // Archiv-PDF an Ordner/Titel/Datum anpassen (verschieben bzw. umbenennen)
+    if (folder_id !== undefined || title !== undefined || doc_date !== undefined) {
+      try {
+        syncArchivePdf(id);
+      } catch (fsErr) {
+        console.error(`Archiv-PDF von Dokument ${id} konnte nicht verschoben werden:`, fsErr);
+      }
+    }
 
     // Falls Farbmodus, Drehung oder Ecken geändert wurden oder reprocess angefordert wurde,
     // Bild neu aufbereiten (asynchron über Queue)

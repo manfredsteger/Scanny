@@ -105,6 +105,58 @@ export function cleanupWorkFiles(id: number): void {
   }
 }
 
+/**
+ * Archivverzeichnis für einen Ordner (bzw. _Eingang, wenn kein Ordner gesetzt ist).
+ */
+export function archiveDirForFolder(folderId: number | null | undefined): string {
+  if (folderId) {
+    const folder = getDb().prepare('SELECT name FROM folders WHERE id = ?').get(folderId) as
+      | { name: string }
+      | undefined;
+    if (folder?.name) return path.join(paths.archiveDir, folder.name);
+  }
+  return path.join(paths.archiveDir, '_Eingang');
+}
+
+/**
+ * Bringt das Archiv-PDF eines Dokuments in Einklang mit den aktuellen DB-Werten
+ * (Ordner, Titel, Datum): verschiebt/benennt die Datei bei Bedarf um und speichert pdf_path.
+ * Liefert den (neuen) Pfad oder null, wenn es (noch) kein PDF gibt.
+ */
+export function syncArchivePdf(id: number): string | null {
+  const db = getDb();
+  const doc = db
+    .prepare('SELECT title, doc_date, folder_id, pdf_path, original_name, created_at FROM documents WHERE id = ?')
+    .get(id) as
+    | {
+        title: string | null;
+        doc_date: string | null;
+        folder_id: number | null;
+        pdf_path: string | null;
+        original_name: string | null;
+        created_at: string | null;
+      }
+    | undefined;
+  if (!doc?.pdf_path || !fs.existsSync(doc.pdf_path)) return doc?.pdf_path ?? null;
+
+  const targetDir = archiveDirForFolder(doc.folder_id);
+  if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
+
+  const dateStr =
+    doc.doc_date && /^\d{4}-\d{2}-\d{2}$/.test(doc.doc_date.trim())
+      ? doc.doc_date.trim()
+      : localDateString(doc.created_at);
+  const titleToUse =
+    (doc.title && doc.title.trim()) || (doc.original_name ? path.parse(doc.original_name).name : 'Beleg');
+
+  const newPath = determineArchivePdfPath(targetDir, dateStr, titleToUse, doc.pdf_path);
+  if (newPath === doc.pdf_path) return newPath;
+
+  moveOrCopySync(doc.pdf_path, newPath);
+  db.prepare('UPDATE documents SET pdf_path = ? WHERE id = ?').run(newPath, id);
+  return newPath;
+}
+
 export interface OcrPipelineOptions {
   id: number;
   inputPath: string;

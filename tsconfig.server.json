@@ -10,5 +10,6 @@
     "skipLibCheck": true,
     "declaration": false
   },
-  "include": ["server/**/*"]
+  "include": ["server/**/*"],
+  "exclude": ["server/**/*.test.ts", "server/dist"]
 }

@@ -5,7 +5,12 @@ import {
   ScannyDocument,
   DocumentFormData,
   DOCUMENT_TYPE_OPTIONS,
+  HighlightField,
+  formatDocumentType,
+  parseExtraction,
+  suggestFolderId,
 } from '../types';
+import { buildTitle } from '../../server/pipeline/title';
 
 export type { DocumentFormData };
 
@@ -15,6 +20,20 @@ interface DocumentFormProps {
   value: DocumentFormData;
   onChange: (data: DocumentFormData) => void;
   disabled?: boolean;
+  /** Meldet, über welchem Feld die Maus ist (Fundstelle im Text hervorheben) */
+  onHoverField?: (field: HighlightField) => void;
+}
+
+function SuggestionBadge() {
+  return (
+    <span
+      className="flex items-center gap-1 text-[11px] font-medium text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/40 px-1.5 py-0.5 rounded-md"
+      title="Automatisch erkannt – bitte kurz prüfen"
+    >
+      <Sparkles className="w-3 h-3" />
+      Vorschlag
+    </span>
+  );
 }
 
 function getLocalTodayDate(): string {
@@ -23,6 +42,12 @@ function getLocalTodayDate(): string {
   const month = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
+}
+
+function isoToLocalDate(iso: string): string {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso.slice(0, 10);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
 function formatDisplayDate(isoStr?: string | null): string | null {
@@ -40,7 +65,37 @@ export function DocumentForm({
   value,
   onChange,
   disabled = false,
+  onHoverField,
 }: DocumentFormProps) {
+  const extraction = parseExtraction(document);
+  const edited = new Set(value.user_edited);
+
+  // Titel-Vorschlag neu berechnen, solange der Nutzer den Titel nicht selbst editiert hat
+  const withAutoTitle = (next: DocumentFormData): DocumentFormData => {
+    if (next.user_edited.includes('title')) return next;
+    const title = buildTitle(next.doc_type || null, next.sender || null, next.doc_date || null);
+    return title ? { ...next, title } : next;
+  };
+
+  const hoverProps = (field: HighlightField) =>
+    onHoverField
+      ? {
+          onMouseEnter: () => onHoverField(field),
+          onMouseLeave: () => onHoverField(null),
+          onFocus: () => onHoverField(field),
+          onBlur: () => onHoverField(null),
+        }
+      : {};
+
+  const suggested = {
+    doc_type: Boolean(extraction && !edited.has('doc_type') && value.doc_type && value.doc_type === extraction.type),
+    title: Boolean(extraction && !edited.has('title') && value.title),
+    sender: Boolean(extraction && !edited.has('sender') && value.sender && value.sender === extraction.sender),
+    doc_date: Boolean(extraction && !edited.has('doc_date') && value.doc_date && value.doc_date === extraction.date),
+    amount_cents: Boolean(
+      extraction && !edited.has('amount_cents') && value.amount_cents !== null && value.amount_cents === extraction.amountCents
+    ),
+  };
   const markFieldEdited = (field: string): string[] => {
     if (!value.user_edited.includes(field)) {
       return [...value.user_edited, field];
@@ -50,11 +105,12 @@ export function DocumentForm({
 
   const handleFieldChange = (field: keyof DocumentFormData, newVal: any) => {
     const updatedEdited = markFieldEdited(field as string);
-    onChange({
+    const next = {
       ...value,
       [field]: newVal,
       user_edited: updatedEdited,
-    });
+    };
+    onChange(field === 'doc_type' || field === 'sender' ? withAutoTitle(next) : next);
   };
 
   const handleAmountChange = (raw: string) => {
@@ -84,23 +140,20 @@ export function DocumentForm({
     // Nur wenn der Nutzer den Ordner noch nicht manuell gewählt/berührt hat,
     // schlagen wir den Ordner passend zum gewählten Jahr vor
     if (!updatedEdited.includes('folder_id') && dateStr) {
-      const year = parseInt(dateStr.slice(0, 4), 10);
-      if (!isNaN(year)) {
-        const matchingFolder = folders.find(
-          (f) => (f.kind === 'steuerjahr' || f.kind === 'jahr') && f.year === year
-        );
-        if (matchingFolder) {
-          autoFolderId = matchingFolder.id;
-        }
+      const suggestion = suggestFolderId(folders, dateStr);
+      if (suggestion) {
+        autoFolderId = suggestion;
       }
     }
 
-    onChange({
-      ...value,
-      doc_date: dateStr,
-      folder_id: autoFolderId,
-      user_edited: updatedEdited,
-    });
+    onChange(
+      withAutoTitle({
+        ...value,
+        doc_date: dateStr,
+        folder_id: autoFolderId,
+        user_edited: updatedEdited,
+      })
+    );
   };
 
   // Heutiges Datum (lokales Datum, kein UTC-Versatz)
@@ -110,7 +163,7 @@ export function DocumentForm({
 
   // Dateidatum (echtes Datum aus documents.file_date oder Fallback auf created_at)
   const setFileDate = () => {
-    const targetDate = document.file_date || (document.created_at ? document.created_at.slice(0, 10) : getLocalTodayDate());
+    const targetDate = document.file_date || (document.created_at ? isoToLocalDate(document.created_at) : getLocalTodayDate());
     handleDateChange(targetDate);
   };
 
@@ -126,6 +179,7 @@ export function DocumentForm({
             <Tag className="w-3.5 h-3.5 text-zinc-500" />
             Dokumenttyp
           </label>
+          {suggested.doc_type && <SuggestionBadge />}
         </div>
         <select
           id="document-form-doc-type"
@@ -141,6 +195,53 @@ export function DocumentForm({
             </option>
           ))}
         </select>
+        {extraction && (
+          <p id="document-form-type-hint" className="mt-1 text-[11px] text-zinc-500 dark:text-zinc-400">
+            {extraction.typeFallback ? (
+              <>
+                Nicht sicher erkannt
+                {extraction.typeRunnerUp && (
+                  <>
+                    {' '}– evtl.{' '}
+                    <button
+                      type="button"
+                      disabled={disabled}
+                      onClick={() => handleFieldChange('doc_type', extraction.typeRunnerUp)}
+                      className="underline decoration-dotted text-blue-600 dark:text-blue-400 hover:text-blue-700 cursor-pointer"
+                    >
+                      {formatDocumentType(extraction.typeRunnerUp)}
+                    </button>
+                  </>
+                )}
+              </>
+            ) : (
+              <>
+                Erkannt als {formatDocumentType(extraction.type)}{' '}
+                {extraction.typeConfidence >= 0.7 ? (
+                  '(sicher)'
+                ) : (
+                  <>
+                    (unsicher
+                    {extraction.typeRunnerUp && (
+                      <>
+                        , evtl.{' '}
+                        <button
+                          type="button"
+                          disabled={disabled}
+                          onClick={() => handleFieldChange('doc_type', extraction.typeRunnerUp)}
+                          className="underline decoration-dotted text-blue-600 dark:text-blue-400 hover:text-blue-700 cursor-pointer"
+                        >
+                          {formatDocumentType(extraction.typeRunnerUp)}
+                        </button>
+                      </>
+                    )}
+                    )
+                  </>
+                )}
+              </>
+            )}
+          </p>
+        )}
       </div>
 
       {/* Name / Titel */}
@@ -150,6 +251,7 @@ export function DocumentForm({
             <FileText className="w-3.5 h-3.5 text-zinc-500" />
             Titel / Name
           </label>
+          {suggested.title && <SuggestionBadge />}
         </div>
         <input
           id="document-form-title"
@@ -163,12 +265,13 @@ export function DocumentForm({
       </div>
 
       {/* Absender */}
-      <div>
+      <div {...hoverProps('sender')}>
         <div className="flex items-center justify-between mb-1.5">
           <label className="flex items-center gap-1.5 text-xs font-semibold text-zinc-700 dark:text-zinc-300">
             <Building2 className="w-3.5 h-3.5 text-zinc-500" />
             Absender / Aussteller
           </label>
+          {suggested.sender && <SuggestionBadge />}
         </div>
         <input
           id="document-form-sender"
@@ -182,23 +285,32 @@ export function DocumentForm({
       </div>
 
       {/* Dokumentdatum */}
-      <div>
+      <div {...hoverProps('doc_date')}>
         <div className="flex items-center justify-between mb-1.5">
           <label className="flex items-center gap-1.5 text-xs font-semibold text-zinc-700 dark:text-zinc-300">
             <Calendar className="w-3.5 h-3.5 text-zinc-500" />
             Dokumentdatum
           </label>
+          {suggested.doc_date && <SuggestionBadge />}
         </div>
 
         {/* Schnellknöpfe */}
-        <div className="grid grid-cols-3 gap-1.5 mb-2">
+        <div className="grid grid-cols-2 gap-1.5 mb-2">
           <button
             type="button"
-            disabled={true}
-            title="Wird in Schritt 3 per OCR automatisch erkannt"
-            className="px-2 py-1 text-xs rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/40 text-zinc-400 cursor-not-allowed opacity-60 text-center truncate"
+            id="date-btn-detected"
+            disabled={disabled || !extraction?.date}
+            onClick={() => extraction?.date && handleDateChange(extraction.date)}
+            title={extraction?.date ? 'Im Text erkanntes Datum übernehmen' : 'Kein Datum im Text erkannt'}
+            className={`col-span-2 px-2 py-1 text-xs rounded-lg border text-center truncate transition-colors ${
+              !extraction?.date
+                ? 'border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/40 text-zinc-400 cursor-not-allowed opacity-60'
+                : value.doc_date === extraction.date
+                ? 'border-blue-500 bg-blue-50 dark:bg-blue-950/50 text-blue-700 dark:text-blue-300 font-semibold cursor-pointer'
+                : 'border-zinc-200 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-300 font-medium cursor-pointer'
+            }`}
           >
-            Erkannt: –
+            {extraction?.date ? `Erkannt: ${formatDisplayDate(extraction.date)}` : 'Erkannt: –'}
           </button>
           <button
             type="button"
@@ -232,12 +344,13 @@ export function DocumentForm({
       </div>
 
       {/* Betrag */}
-      <div>
+      <div {...hoverProps('amount_cents')}>
         <div className="flex items-center justify-between mb-1.5">
           <label className="flex items-center gap-1.5 text-xs font-semibold text-zinc-700 dark:text-zinc-300">
             <Euro className="w-3.5 h-3.5 text-zinc-500" />
             Betrag (optional)
           </label>
+          {suggested.amount_cents && <SuggestionBadge />}
         </div>
         <div className="relative">
           <input

@@ -15,8 +15,9 @@ import {
   Copy,
   Check,
 } from 'lucide-react';
-import { Folder, ScannyDocument, DocumentFormData } from '../types';
+import { Folder, ScannyDocument, DocumentFormData, HighlightField, highlightSpan, parseExtraction } from '../types';
 import { DocumentForm } from './DocumentForm';
+import { OcrTextView } from './OcrTextView';
 import { DeleteConfirmModal } from './DeleteConfirmModal';
 
 interface DocumentDetailDrawerProps {
@@ -43,6 +44,7 @@ export function DocumentDetailDrawer({
   const [previewMode, setPreviewMode] = useState<'processed' | 'original'>('processed');
   const [activeTab, setActiveTab] = useState<'preview' | 'pdf' | 'text'>('preview');
   const [copied, setCopied] = useState(false);
+  const [hoveredField, setHoveredField] = useState<HighlightField>(null);
 
   const handleCopyOcrText = async () => {
     if (!localDoc?.ocr_text) return;
@@ -584,12 +586,12 @@ export function DocumentDetailDrawer({
                   </div>
 
                   {localDoc.ocr_text ? (
-                    <pre
+                    <OcrTextView
                       id="drawer-ocr-text-display"
-                      className="flex-1 overflow-y-auto font-mono text-xs text-zinc-800 dark:text-zinc-200 whitespace-pre-wrap select-all leading-relaxed p-3 bg-zinc-50 dark:bg-zinc-900/60 rounded-lg border border-zinc-200/80 dark:border-zinc-800/80"
-                    >
-                      {localDoc.ocr_text}
-                    </pre>
+                      text={localDoc.ocr_text}
+                      highlight={highlightSpan(parseExtraction(localDoc), hoveredField)}
+                      className="flex-1"
+                    />
                   ) : (
                     <div className="flex flex-col items-center justify-center flex-1 text-center p-6 text-zinc-400">
                       <AlignLeft className="w-8 h-8 opacity-40 mb-2" />
@@ -612,10 +614,11 @@ export function DocumentDetailDrawer({
               </h3>
               {formData && (
                 <DocumentForm
-                  document={document}
+                  document={localDoc}
                   folders={folders}
                   value={formData}
                   onChange={setFormData}
+                  onHoverField={setHoveredField}
                 />
               )}
             </div>

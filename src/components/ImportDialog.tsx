@@ -12,8 +12,18 @@ import {
   RotateCw,
   AlertTriangle,
 } from 'lucide-react';
-import { Folder, ScannyDocument, DocumentFormData } from '../types';
+import {
+  Folder,
+  ScannyDocument,
+  DocumentFormData,
+  HighlightField,
+  formatDocumentType,
+  highlightSpan,
+  parseExtraction,
+  suggestFolderId,
+} from '../types';
 import { DocumentForm } from './DocumentForm';
+import { OcrTextView } from './OcrTextView';
 
 interface ImportDialogProps {
   isOpen: boolean;
@@ -36,7 +46,8 @@ export function ImportDialog({
   const [formDataMap, setFormDataMap] = useState<Record<number, DocumentFormData>>({});
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
-  const [previewMode, setPreviewMode] = useState<'processed' | 'original'>('processed');
+  const [previewMode, setPreviewMode] = useState<'processed' | 'original' | 'text'>('processed');
+  const [hoveredField, setHoveredField] = useState<HighlightField>(null);
 
   // Hilfsfunktion zum Erzeugen der Standard-Formulardaten für ein Dokument
   const getInitialFormData = useCallback(
@@ -60,16 +71,7 @@ export function ImportDialog({
       // Passenden Ordner für das Jahr vorschlagen (falls noch nicht manuell editiert)
       let autoFolderId = doc.folder_id;
       if (!autoFolderId && !userEditedArr.includes('folder_id')) {
-        const dateToCheck = doc.doc_date || doc.file_date || doc.created_at;
-        if (dateToCheck) {
-          const year = parseInt(dateToCheck.slice(0, 4), 10);
-          if (!isNaN(year)) {
-            const match = currentFolders.find(
-              (f) => (f.kind === 'steuerjahr' || f.kind === 'jahr') && f.year === year
-            );
-            if (match) autoFolderId = match.id;
-          }
-        }
+        autoFolderId = suggestFolderId(currentFolders, doc.doc_date || doc.file_date || doc.created_at);
       }
 
       return {
@@ -179,19 +181,26 @@ export function ImportDialog({
                 nextMap[fresh.id] = getInitialFormData(fresh, folders);
               } else {
                 const edited = new Set(existing.user_edited);
+                const nextDocDate = edited.has('doc_date') ? existing.doc_date : (fresh.doc_date || existing.doc_date);
+                // Ordner-Vorschlag nachziehen, wenn sich das (erkannte) Datum geändert hat
+                const nextFolderId = edited.has('folder_id')
+                  ? existing.folder_id
+                  : fresh.folder_id ||
+                    (nextDocDate !== existing.doc_date ? suggestFolderId(folders, nextDocDate) : null) ||
+                    existing.folder_id;
                 nextMap[fresh.id] = {
                   ...existing,
                   title: edited.has('title') ? existing.title : (fresh.title || existing.title),
                   sender: edited.has('sender') ? existing.sender : (fresh.sender || existing.sender),
                   doc_type: edited.has('doc_type') ? existing.doc_type : (fresh.doc_type || existing.doc_type),
-                  doc_date: edited.has('doc_date') ? existing.doc_date : (fresh.doc_date || existing.doc_date),
+                  doc_date: nextDocDate,
                   amount_cents: edited.has('amount_cents') ? existing.amount_cents : fresh.amount_cents,
                   amount_str: edited.has('amount_cents')
                     ? existing.amount_str
                     : fresh.amount_cents !== null && fresh.amount_cents !== undefined
                     ? (fresh.amount_cents / 100).toFixed(2).replace('.', ',')
                     : existing.amount_str,
-                  folder_id: edited.has('folder_id') ? existing.folder_id : (fresh.folder_id || existing.folder_id),
+                  folder_id: nextFolderId,
                 };
               }
             }
@@ -512,7 +521,7 @@ export function ImportDialog({
                         {itemFormData.title || doc.original_name}
                       </p>
                       <p className="text-[11px] text-zinc-500 dark:text-zinc-400 truncate">
-                        {itemFormData.doc_type || '– noch offen –'}
+                        {formatDocumentType(itemFormData.doc_type) || '– noch offen –'}
                       </p>
 
                       {/* Status-Punkt */}
@@ -569,8 +578,8 @@ export function ImportDialog({
 
                 {/* Vorschau-Container */}
                 <div className="w-full flex-1 flex items-center justify-center relative min-h-0 overflow-hidden rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white/40 dark:bg-zinc-900/40">
-                  {/* Umschalter Aufbereitet | Original oben rechts (nur bei Nicht-PDF) */}
-                  {!isDocPdf(currentDoc) && (
+                  {/* Umschalter Aufbereitet | Original | Text oben rechts (PDF: PDF | Text) */}
+                  {(
                     <div
                       id="import-dialog-preview-mode-toggle"
                       className="absolute top-3 right-3 z-20 flex items-center bg-white/95 dark:bg-zinc-900/95 backdrop-blur-xs p-0.5 rounded-xl border border-zinc-200/90 dark:border-zinc-800 shadow-sm text-xs font-medium"
@@ -584,24 +593,52 @@ export function ImportDialog({
                             : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white'
                         }`}
                       >
-                        Aufbereitet
+                        {isDocPdf(currentDoc) ? 'PDF' : 'Aufbereitet'}
                       </button>
+                      {!isDocPdf(currentDoc) && (
+                        <button
+                          type="button"
+                          onClick={() => setPreviewMode('original')}
+                          className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer ${
+                            previewMode === 'original'
+                              ? 'bg-blue-600 text-white font-semibold shadow-xs'
+                              : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white'
+                          }`}
+                        >
+                          Original
+                        </button>
+                      )}
                       <button
                         type="button"
-                        onClick={() => setPreviewMode('original')}
+                        id="import-dialog-preview-text"
+                        onClick={() => setPreviewMode('text')}
+                        title="Erkannter Text – beim Hovern über Datum, Betrag oder Absender wird die Fundstelle markiert"
                         className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer ${
-                          previewMode === 'original'
+                          previewMode === 'text'
                             ? 'bg-blue-600 text-white font-semibold shadow-xs'
                             : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white'
                         }`}
                       >
-                        Original
+                        Text
                       </button>
                     </div>
                   )}
 
-                  {/* PDF Vorschau über Original */}
-                  {isDocPdf(currentDoc) ? (
+                  {/* Text-Ansicht mit Fundstellen, PDF-Vorschau oder Bild */}
+                  {previewMode === 'text' ? (
+                    currentDoc.ocr_text ? (
+                      <OcrTextView
+                        id="import-dialog-ocr-text"
+                        text={currentDoc.ocr_text}
+                        highlight={highlightSpan(parseExtraction(currentDoc), hoveredField)}
+                        className="w-full h-full pt-12"
+                      />
+                    ) : (
+                      <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                        Noch kein Text erkannt – die Texterkennung läuft nach der Aufbereitung.
+                      </p>
+                    )
+                  ) : isDocPdf(currentDoc) ? (
                     <iframe
                       src={`/api/documents/${currentDoc.id}/original`}
                       title="PDF Vorschau"
@@ -751,6 +788,7 @@ export function ImportDialog({
                 folders={folders}
                 value={getCurrentFormData(currentDoc)}
                 onChange={(data) => handleFormChange(currentDoc.id, data)}
+                onHoverField={setHoveredField}
               />
             )}
           </div>

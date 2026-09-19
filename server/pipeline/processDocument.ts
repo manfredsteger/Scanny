@@ -5,7 +5,9 @@ import { promisify } from 'node:util';
 import sharp from 'sharp';
 import { fileURLToPath } from 'node:url';
 import { getDb, paths } from '../db.js';
-import { runOcrPipeline } from './ocr.js';
+import { runOcrPipeline, syncArchivePdf } from './ocr.js';
+import { detectDocument } from './extract.js';
+import { buildTitle } from './title.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -92,6 +94,86 @@ export async function runScanPy(options: {
   } catch (err: any) {
     console.error('[scan.py error]', err);
     throw new Error(err?.message || 'Fehler beim Ausführen von scan.py');
+  }
+}
+
+function parseUserEdited(raw: string | null | undefined): Set<string> {
+  if (!raw) return new Set();
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return new Set(parsed.map(String));
+  } catch {
+    // ältere Einträge: kommagetrennt
+  }
+  return new Set(raw.split(',').map((s) => s.trim()).filter(Boolean));
+}
+
+/**
+ * Erkennung nach der OCR: Typ, Datum, Betrag, Absender und Titel aus dem OCR-Text vorschlagen.
+ * Setzt nur Felder, die NICHT in user_edited stehen, speichert das Ergebnis (inkl. Fundstellen)
+ * in documents.extraction und benennt danach das Archiv-PDF passend um.
+ * Synchron: zwischen Lesen und Schreiben kann kein Request dazwischenfunken.
+ */
+export function applyDetection(id: number, layout: string | null): void {
+  const db = getDb();
+  const doc = db
+    .prepare('SELECT ocr_text, title, doc_type, sender, doc_date, user_edited FROM documents WHERE id = ?')
+    .get(id) as
+    | {
+        ocr_text: string | null;
+        title: string | null;
+        doc_type: string | null;
+        sender: string | null;
+        doc_date: string | null;
+        user_edited: string | null;
+      }
+    | undefined;
+  if (!doc) return;
+
+  if (!doc.ocr_text) {
+    db.prepare('UPDATE documents SET extraction = NULL WHERE id = ?').run(id);
+    return;
+  }
+
+  const det = detectDocument(doc.ocr_text, layout);
+  const edited = parseUserEdited(doc.user_edited);
+
+  const updates: Record<string, string | number | null> = {};
+  if (!edited.has('doc_type')) updates.doc_type = det.type;
+  if (!edited.has('sender') && det.sender) updates.sender = det.sender;
+  if (!edited.has('doc_date') && det.date) updates.doc_date = det.date;
+  if (!edited.has('amount_cents') && det.amountCents !== null) updates.amount_cents = det.amountCents;
+  if (!edited.has('title')) {
+    // Titel aus den endgültigen Werten bauen (vom Nutzer gesetzte Typen/Absender zählen mit)
+    const title = buildTitle(
+      (updates.doc_type as string | undefined) ?? doc.doc_type,
+      (updates.sender as string | undefined) ?? doc.sender,
+      (updates.doc_date as string | undefined) ?? doc.doc_date
+    );
+    if (title) updates.title = title;
+  }
+
+  const columns = Object.keys(updates);
+  const setSql = columns.map((c) => `${c} = ?`).join(', ');
+  db.prepare(
+    `UPDATE documents SET extraction = ?${setSql ? ', ' + setSql : ''},
+       updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+     WHERE id = ?`
+  ).run(JSON.stringify(det), ...columns.map((c) => updates[c]), id);
+
+  syncArchivePdf(id);
+
+  console.log(
+    `[Erkennung] Dokument ${id}: ${det.type} (${det.typeConfidence}), Datum ${det.date ?? '–'}, ` +
+      `Betrag ${det.amountCents ?? '–'}, Absender ${det.sender ?? '–'}`
+  );
+}
+
+function runDetectionSafely(id: number, layout: string | null): void {
+  try {
+    applyDetection(id, layout);
+  } catch (err) {
+    console.warn(`[Erkennung] Fehler bei Dokument ${id} (Dokument bleibt ohne Vorschläge):`, err);
   }
 }
 
@@ -223,6 +305,8 @@ export async function processDocument(id: number): Promise<void> {
         id
       );
 
+      runDetectionSafely(id, null);
+
       console.log(
         `[Pipeline] PDF-Dokument ${id} erfolgreich verarbeitet (${ocrRes.pageCount} Seite(n), OCR-Text: ${Boolean(
           ocrRes.ocrText
@@ -335,6 +419,8 @@ export async function processDocument(id: number): Promise<void> {
       baseTitle,
       id
     );
+
+    runDetectionSafely(id, scanRes.layout ?? null);
 
     console.log(
       `[Pipeline] Dokument ${id} erfolgreich aufbereitet & durchsuchbares PDF erzeugt (${ocrRes.pageCount} Seite(n), OCR-Text: ${Boolean(
