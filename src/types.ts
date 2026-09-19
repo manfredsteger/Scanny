@@ -12,6 +12,7 @@ export interface Folder {
 }
 
 export type ActiveView =
+  | { type: 'dashboard' }
   | { type: 'inbox' }
   | { type: 'folder'; folderId: number }
   | { type: 'search' }
@@ -223,3 +224,58 @@ export interface QueueStats {
   filed?: number;
 }
 
+
+/** Treffer aus GET /api/search. snippet enthält \u0001…\u0002 als Markierung. */
+export interface SearchHit {
+  id: number;
+  title: string | null;
+  original_name: string;
+  doc_date: string | null;
+  doc_type: string | null;
+  sender: string | null;
+  amount_cents: number | null;
+  status: DocumentStatus;
+  folder_id: number | null;
+  folder_name: string | null;
+  folder_kind: FolderKind | null;
+  folder_color: string | null;
+  page_count: number;
+  updated_at: string;
+  snippet: string | null;
+  rank: number;
+}
+
+/** Farbige Chips je Dokumenttyp (Tailwind-Klassen). */
+export const DOCUMENT_TYPE_CHIP: Record<string, string> = {
+  rechnung: 'bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-950/50 dark:text-blue-300 dark:border-blue-900',
+  quittung: 'bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/50 dark:text-amber-300 dark:border-amber-900',
+  kontoauszug: 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/50 dark:text-emerald-300 dark:border-emerald-900',
+  vertrag: 'bg-violet-50 text-violet-700 border-violet-200 dark:bg-violet-950/50 dark:text-violet-300 dark:border-violet-900',
+  bescheid: 'bg-rose-50 text-rose-700 border-rose-200 dark:bg-rose-950/50 dark:text-rose-300 dark:border-rose-900',
+  lohnabrechnung: 'bg-teal-50 text-teal-700 border-teal-200 dark:bg-teal-950/50 dark:text-teal-300 dark:border-teal-900',
+  spendenquittung: 'bg-pink-50 text-pink-700 border-pink-200 dark:bg-pink-950/50 dark:text-pink-300 dark:border-pink-900',
+  versicherung: 'bg-indigo-50 text-indigo-700 border-indigo-200 dark:bg-indigo-950/50 dark:text-indigo-300 dark:border-indigo-900',
+  brief: 'bg-slate-50 text-slate-700 border-slate-200 dark:bg-slate-900/60 dark:text-slate-300 dark:border-slate-800',
+  sonstiges: 'bg-zinc-50 text-zinc-600 border-zinc-200 dark:bg-zinc-900/60 dark:text-zinc-300 dark:border-zinc-800',
+};
+
+export function typeChipClass(type: string | null | undefined): string {
+  return DOCUMENT_TYPE_CHIP[(type || 'sonstiges').toLowerCase()] || DOCUMENT_TYPE_CHIP.sonstiges;
+}
+
+/** "2026-08-14" -> "14.08.2026" (ohne Zeitzonen-Umrechnung) */
+export function formatIsoDateDe(iso: string | null | undefined): string {
+  if (!iso) return '';
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
+  return m ? `${m[3]}.${m[2]}.${m[1]}` : iso;
+}
+
+export function formatEuro(cents: number | null | undefined): string {
+  if (cents === null || cents === undefined) return '';
+  return (cents / 100).toLocaleString('de-DE', { style: 'currency', currency: 'EUR' });
+}
+
+export const GERMAN_MONTH_NAMES = [
+  'Januar', 'Februar', 'März', 'April', 'Mai', 'Juni',
+  'Juli', 'August', 'September', 'Oktober', 'November', 'Dezember',
+];

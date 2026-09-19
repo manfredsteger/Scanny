@@ -10,8 +10,34 @@ import {
   AlertCircle,
   Clock,
   ArrowRight,
+  LayoutGrid,
+  List,
+  ChevronUp,
+  ChevronDown,
 } from 'lucide-react';
-import { Folder, SystemPaths, ScannyDocument } from '../types';
+import {
+  Folder,
+  SystemPaths,
+  ScannyDocument,
+  DOCUMENT_TYPE_OPTIONS,
+  GERMAN_MONTH_NAMES,
+  formatDocumentType,
+  formatEuro,
+  formatIsoDateDe,
+  typeChipClass,
+} from '../types';
+
+type SortKey = 'doc_date' | 'doc_type' | 'title' | 'sender' | 'amount_cents' | 'page_count';
+
+const VIEW_MODE_KEY = 'scanny.folderViewMode';
+
+function readViewMode(): 'table' | 'tiles' {
+  try {
+    return localStorage.getItem(VIEW_MODE_KEY) === 'tiles' ? 'tiles' : 'table';
+  } catch {
+    return 'table';
+  }
+}
 
 interface FolderViewProps {
   folder: Folder;
@@ -31,8 +57,61 @@ export function FolderView({
   onSelectDocument,
 }: FolderViewProps) {
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [viewMode, setViewModeState] = useState<'table' | 'tiles'>(readViewMode);
+  const [sortKey, setSortKey] = useState<SortKey>('doc_date');
+  const [sortAsc, setSortAsc] = useState(false);
+  const [monthFilter, setMonthFilter] = useState<string>('all');
+  const [typeFilter, setTypeFilter] = useState<string>('all');
+
+  const setViewMode = (mode: 'table' | 'tiles') => {
+    setViewModeState(mode);
+    try {
+      localStorage.setItem(VIEW_MODE_KEY, mode);
+    } catch {
+      // Speicher nicht verfügbar – Ansicht gilt nur für diese Sitzung
+    }
+  };
 
   const folderDocs = documents.filter((d) => d.folder_id === folder.id && d.status === 'filed');
+
+  // Filter: Monat (YYYY-MM aus doc_date) und Dokumenttyp
+  const monthOptions = Array.from(
+    new Set(folderDocs.map((d) => (d.doc_date || '').slice(0, 7)).filter((m) => /^\d{4}-\d{2}$/.test(m)))
+  ).sort();
+  const filteredDocs = folderDocs.filter(
+    (d) =>
+      (monthFilter === 'all' ||
+        (monthFilter === 'none' ? !d.doc_date : (d.doc_date || '').startsWith(monthFilter))) &&
+      (typeFilter === 'all' || (d.doc_type || '') === typeFilter)
+  );
+
+  const sortedDocs = [...filteredDocs].sort((a, b) => {
+    const av = a[sortKey];
+    const bv = b[sortKey];
+    // leere Werte immer ans Ende
+    if (av === null || av === undefined || av === '') return 1;
+    if (bv === null || bv === undefined || bv === '') return -1;
+    const cmp =
+      typeof av === 'number' && typeof bv === 'number'
+        ? av - bv
+        : String(sortKey === 'doc_type' ? formatDocumentType(String(av)) : av).localeCompare(
+            String(sortKey === 'doc_type' ? formatDocumentType(String(bv)) : bv),
+            'de'
+          );
+    return sortAsc ? cmp : -cmp;
+  });
+
+  const totalCents = filteredDocs.reduce((sum, d) => sum + (d.amount_cents || 0), 0);
+
+  const toggleSort = (key: SortKey) => {
+    if (key === sortKey) setSortAsc(!sortAsc);
+    else {
+      setSortKey(key);
+      setSortAsc(key !== 'doc_date' && key !== 'amount_cents');
+    }
+  };
+
+  const monthLabel = (ym: string) => `${GERMAN_MONTH_NAMES[parseInt(ym.slice(5, 7), 10) - 1]} ${ym.slice(0, 4)}`;
 
   const getKindBadge = () => {
     switch (folder.kind) {
@@ -157,8 +236,151 @@ export function FolderView({
         </span>
       </div>
 
-      {/* Dokumentenliste */}
-      {folderDocs.length === 0 ? (
+      {/* Filter & Ansicht */}
+      {folderDocs.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2.5">
+          <select
+            id="folder-filter-month"
+            value={monthFilter}
+            onChange={(e) => setMonthFilter(e.target.value)}
+            className="px-3 py-1.5 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl text-xs text-zinc-700 dark:text-zinc-300 cursor-pointer"
+          >
+            <option value="all">Alle Monate</option>
+            {monthOptions.map((m) => (
+              <option key={m} value={m}>
+                {monthLabel(m)}
+              </option>
+            ))}
+            <option value="none">Ohne Datum</option>
+          </select>
+          <select
+            id="folder-filter-type"
+            value={typeFilter}
+            onChange={(e) => setTypeFilter(e.target.value)}
+            className="px-3 py-1.5 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl text-xs text-zinc-700 dark:text-zinc-300 cursor-pointer"
+          >
+            <option value="all">Alle Typen</option>
+            {DOCUMENT_TYPE_OPTIONS.map((t) => (
+              <option key={t.key} value={t.key}>
+                {t.label}
+              </option>
+            ))}
+          </select>
+          <div className="ml-auto flex items-center rounded-xl bg-zinc-200/80 dark:bg-zinc-800 p-0.5 text-xs font-medium">
+            <button
+              type="button"
+              id="folder-view-table"
+              onClick={() => setViewMode('table')}
+              className={`px-2.5 py-1 rounded-lg flex items-center gap-1 cursor-pointer ${
+                viewMode === 'table' ? 'bg-white dark:bg-zinc-900 text-zinc-900 dark:text-white shadow-xs' : 'text-zinc-600 dark:text-zinc-400'
+              }`}
+            >
+              <List className="w-3.5 h-3.5" /> Tabelle
+            </button>
+            <button
+              type="button"
+              id="folder-view-tiles"
+              onClick={() => setViewMode('tiles')}
+              className={`px-2.5 py-1 rounded-lg flex items-center gap-1 cursor-pointer ${
+                viewMode === 'tiles' ? 'bg-white dark:bg-zinc-900 text-zinc-900 dark:text-white shadow-xs' : 'text-zinc-600 dark:text-zinc-400'
+              }`}
+            >
+              <LayoutGrid className="w-3.5 h-3.5" /> Kacheln
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Tabellenansicht */}
+      {folderDocs.length > 0 && viewMode === 'table' && (
+        <div className="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 overflow-hidden">
+          <div className="overflow-x-auto">
+            <table id="folder-table" className="w-full text-sm">
+              <thead className="bg-zinc-50 dark:bg-zinc-800/60 text-[11px] uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
+                <tr>
+                  {(
+                    [
+                      ['doc_date', 'Datum', 'text-left w-28'],
+                      ['doc_type', 'Typ', 'text-left w-36'],
+                      ['title', 'Titel', 'text-left'],
+                      ['sender', 'Absender', 'text-left'],
+                      ['amount_cents', 'Betrag', 'text-right w-32'],
+                      ['page_count', 'Seiten', 'text-right w-20'],
+                    ] as [SortKey, string, string][]
+                  ).map(([key, label, cls]) => (
+                    <th key={key} className={`px-4 py-2.5 font-semibold ${cls}`}>
+                      <button
+                        type="button"
+                        id={`folder-sort-${key}`}
+                        onClick={() => toggleSort(key)}
+                        className={`inline-flex items-center gap-1 cursor-pointer hover:text-zinc-900 dark:hover:text-white ${
+                          sortKey === key ? 'text-zinc-900 dark:text-white' : ''
+                        }`}
+                      >
+                        {label}
+                        {sortKey === key &&
+                          (sortAsc ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />)}
+                      </button>
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
+                {sortedDocs.map((doc) => (
+                  <tr
+                    key={doc.id}
+                    id={`folder-row-${doc.id}`}
+                    onClick={() => onSelectDocument && onSelectDocument(doc)}
+                    className="hover:bg-blue-50/50 dark:hover:bg-blue-950/20 cursor-pointer"
+                  >
+                    <td className="px-4 py-2.5 font-mono text-xs text-zinc-600 dark:text-zinc-300 whitespace-nowrap">
+                      {formatIsoDateDe(doc.doc_date) || '–'}
+                    </td>
+                    <td className="px-4 py-2.5">
+                      {doc.doc_type ? (
+                        <span className={`text-[11px] font-medium px-2 py-0.5 rounded-md border whitespace-nowrap ${typeChipClass(doc.doc_type)}`}>
+                          {formatDocumentType(doc.doc_type)}
+                        </span>
+                      ) : (
+                        <span className="text-zinc-400">–</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-2.5 font-medium text-zinc-900 dark:text-zinc-100 max-w-xs truncate">
+                      {doc.title || doc.original_name}
+                    </td>
+                    <td className="px-4 py-2.5 text-zinc-600 dark:text-zinc-400 max-w-[14rem] truncate">{doc.sender || '–'}</td>
+                    <td className="px-4 py-2.5 text-right font-mono text-xs text-zinc-800 dark:text-zinc-200 whitespace-nowrap">
+                      {formatEuro(doc.amount_cents) || '–'}
+                    </td>
+                    <td className="px-4 py-2.5 text-right font-mono text-xs text-zinc-500">{doc.page_count || 1}</td>
+                  </tr>
+                ))}
+                {sortedDocs.length === 0 && (
+                  <tr>
+                    <td colSpan={6} className="px-4 py-8 text-center text-xs text-zinc-500">
+                      Keine Belege für diesen Filter.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+              <tfoot className="bg-zinc-50 dark:bg-zinc-800/60 text-xs font-semibold text-zinc-700 dark:text-zinc-300">
+                <tr>
+                  <td id="folder-table-count" colSpan={4} className="px-4 py-2.5">
+                    {filteredDocs.length} {filteredDocs.length === 1 ? 'Dokument' : 'Dokumente'}
+                  </td>
+                  <td id="folder-table-sum" className="px-4 py-2.5 text-right font-mono">
+                    {formatEuro(totalCents)}
+                  </td>
+                  <td />
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Dokumentenliste (Kacheln) */}
+      {folderDocs.length > 0 && viewMode === 'table' ? null : folderDocs.length === 0 ? (
         <div className="text-center py-16 border border-dashed border-zinc-200 dark:border-zinc-800 rounded-2xl bg-white dark:bg-zinc-900/20">
           <div className="w-12 h-12 rounded-2xl bg-zinc-100 dark:bg-zinc-800 text-zinc-400 flex items-center justify-center mx-auto mb-3">
             <FolderIcon className="w-6 h-6" />
@@ -172,7 +394,7 @@ export function FolderView({
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-          {folderDocs.map((doc) => {
+          {sortedDocs.map((doc) => {
             const formattedAmount = formatAmount(doc.amount_cents);
 
             return (
@@ -225,7 +447,7 @@ export function FolderView({
                     </h4>
 
                     <div className="flex items-center justify-between text-[11px] text-zinc-500 dark:text-zinc-400 mt-1">
-                      <span className="truncate">{doc.sender || doc.doc_type || 'Beleg'}</span>
+                      <span className="truncate">{doc.sender || formatDocumentType(doc.doc_type) || 'Beleg'}</span>
                       {doc.doc_date && (
                         <span className="font-mono shrink-0 ml-1 text-zinc-400">
                           {formatDate(doc.doc_date)}
@@ -245,6 +467,13 @@ export function FolderView({
             );
           })}
         </div>
+      )}
+
+      {folderDocs.length > 0 && viewMode === 'tiles' && (
+        <p id="folder-tiles-summary" className="text-xs font-semibold text-zinc-600 dark:text-zinc-400 text-right">
+          {filteredDocs.length} {filteredDocs.length === 1 ? 'Dokument' : 'Dokumente'} · Summe{' '}
+          <span className="font-mono">{formatEuro(totalCents)}</span>
+        </p>
       )}
     </div>
   );

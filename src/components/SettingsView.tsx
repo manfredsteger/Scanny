@@ -21,6 +21,8 @@ export function SettingsView({ paths, health }: SettingsViewProps) {
   const [colorMode, setColorMode] = useState<'bw' | 'gray' | 'color'>('bw');
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const [autoFile, setAutoFile] = useState(false);
+  const [autoFileSaved, setAutoFileSaved] = useState(false);
 
   useEffect(() => {
     fetch('/api/settings')
@@ -29,6 +31,7 @@ export function SettingsView({ paths, health }: SettingsViewProps) {
         if (data?.default_color_mode && ['bw', 'gray', 'color'].includes(data.default_color_mode)) {
           setColorMode(data.default_color_mode);
         }
+        setAutoFile(data?.auto_file === 'true');
       })
       .catch((err) => console.error('Fehler beim Laden der Einstellungen:', err));
   }, []);
@@ -50,6 +53,23 @@ export function SettingsView({ paths, health }: SettingsViewProps) {
       console.error('Fehler beim Speichern des Farbmodus:', err);
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  const handleAutoFileChange = async (next: boolean) => {
+    setAutoFile(next);
+    try {
+      const res = await fetch('/api/settings', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ auto_file: next }),
+      });
+      if (!res.ok) throw new Error('Speichern fehlgeschlagen');
+      setAutoFileSaved(true);
+      setTimeout(() => setAutoFileSaved(false), 2000);
+    } catch (err) {
+      console.error('Fehler beim Speichern von "Automatisch ablegen":', err);
+      setAutoFile(!next);
     }
   };
 
@@ -131,6 +151,40 @@ export function SettingsView({ paths, health }: SettingsViewProps) {
         <p className="text-sm text-zinc-500 dark:text-zinc-400 mt-0.5">
           Systemkonfiguration, Bildverarbeitung, aktive Verzeichnispfade und lokaler Betriebsstatus.
         </p>
+      </div>
+
+      {/* Automatisch ablegen */}
+      <div className="p-5 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl flex items-start justify-between gap-6">
+        <div>
+          <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100 flex items-center gap-2">
+            Automatisch ablegen
+            {autoFileSaved && (
+              <span className="flex items-center gap-1 text-xs font-medium text-emerald-600 dark:text-emerald-400">
+                <Check className="w-3.5 h-3.5" /> Gespeichert
+              </span>
+            )}
+          </h3>
+          <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1 leading-relaxed max-w-xl">
+            Wenn das Belegdatum sicher erkannt wurde und es einen passenden Steuerjahr- bzw. Jahr-Ordner gibt,
+            wird der Beleg nach der Aufbereitung direkt dort abgelegt, ohne Umweg über den Eingang.
+          </p>
+        </div>
+        <button
+          type="button"
+          id="settings-auto-file-toggle"
+          role="switch"
+          aria-checked={autoFile}
+          onClick={() => handleAutoFileChange(!autoFile)}
+          className={`relative shrink-0 w-11 h-6 rounded-full transition-colors cursor-pointer ${
+            autoFile ? 'bg-blue-600' : 'bg-zinc-300 dark:bg-zinc-700'
+          }`}
+        >
+          <span
+            className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${
+              autoFile ? 'translate-x-5' : ''
+            }`}
+          />
+        </button>
       </div>
 
       {/* Standard-Farbmodus für Bildaufbereitung */}

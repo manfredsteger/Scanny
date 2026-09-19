@@ -13,11 +13,16 @@ import {
   Sparkles,
   ArrowRight,
   Plus,
+  Check,
+  FolderInput,
+  X,
 } from 'lucide-react';
-import { ScannyDocument, SystemPaths, formatDocumentType } from '../types';
+import { Folder, ScannyDocument, SystemPaths, formatDocumentType, suggestFolderId } from '../types';
 
 interface InboxViewProps {
   documents: ScannyDocument[];
+  folders: Folder[];
+  onRefresh: () => Promise<void> | void;
   paths: SystemPaths | null;
   onOpenImportDialog: (docs?: ScannyDocument[]) => void;
   onSelectDocument: (doc: ScannyDocument) => void;
@@ -28,6 +33,8 @@ interface InboxViewProps {
 
 export function InboxView({
   documents,
+  folders,
+  onRefresh,
   paths,
   onOpenImportDialog,
   onSelectDocument,
@@ -36,6 +43,72 @@ export function InboxView({
   isUploading = false,
 }: InboxViewProps) {
   const [isDropActive, setIsDropActive] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [lastClickedId, setLastClickedId] = useState<number | null>(null);
+  const [bulkFolderId, setBulkFolderId] = useState<string>('');
+  const [busy, setBusy] = useState(false);
+  const [actionMessage, setActionMessage] = useState<string | null>(null);
+
+  // Nur fertig aufbereitete Belege sind auswählbar / ablegbar
+  const selectableDocs = documents.filter((d) => d.status === 'inbox');
+  const selectedList = selectableDocs.filter((d) => selectedIds.has(d.id));
+
+  // Auswahl bereinigen, wenn Belege den Eingang verlassen
+  React.useEffect(() => {
+    setSelectedIds((prev) => {
+      const valid = new Set(selectableDocs.map((d) => d.id));
+      const next = new Set([...prev].filter((id) => valid.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [documents]);
+
+  const toggleSelect = (doc: ScannyDocument, shiftKey: boolean) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (shiftKey && lastClickedId !== null) {
+        // Bereich zwischen letzter Auswahl und diesem Beleg auswählen
+        const ids = selectableDocs.map((d) => d.id);
+        const a = ids.indexOf(lastClickedId);
+        const b = ids.indexOf(doc.id);
+        if (a >= 0 && b >= 0) {
+          for (const id of ids.slice(Math.min(a, b), Math.max(a, b) + 1)) next.add(id);
+          return next;
+        }
+      }
+      if (next.has(doc.id)) next.delete(doc.id);
+      else next.add(doc.id);
+      return next;
+    });
+    setLastClickedId(doc.id);
+  };
+
+  const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const flash = (msg: string) => {
+    setActionMessage(msg);
+    if (flashTimer.current) clearTimeout(flashTimer.current);
+    flashTimer.current = setTimeout(() => setActionMessage(null), 3500);
+  };
+
+  const fileDocuments = async (ids: number[], folderId: number) => {
+    setBusy(true);
+    try {
+      const res = await fetch('/api/documents/file-bulk', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids, folder_id: folderId }),
+      });
+      const data = await res.json().catch(() => null);
+      const folder = folders.find((f) => f.id === folderId);
+      if (!res.ok) throw new Error(data?.results?.[0]?.error || data?.error || 'Ablegen fehlgeschlagen.');
+      flash(`${data.moved} ${data.moved === 1 ? 'Beleg' : 'Belege'} nach »${folder?.name ?? 'Ordner'}« abgelegt.`);
+      setSelectedIds(new Set());
+      await onRefresh();
+    } catch (err: any) {
+      flash(err?.message || 'Ablegen fehlgeschlagen.');
+    } finally {
+      setBusy(false);
+    }
+  };
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const displayWatchDir = paths?.hostWatchDir || paths?.watchDir;
@@ -114,6 +187,20 @@ export function InboxView({
         </div>
 
         <div className="flex items-center gap-2.5">
+          {selectableDocs.length > 0 && (
+            <button
+              type="button"
+              id="inbox-select-all-btn"
+              onClick={() =>
+                setSelectedIds(
+                  selectedList.length === selectableDocs.length ? new Set() : new Set(selectableDocs.map((d) => d.id))
+                )
+              }
+              className="px-3 py-2 rounded-xl text-xs font-medium text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors cursor-pointer"
+            >
+              {selectedList.length === selectableDocs.length ? 'Auswahl aufheben' : 'Alle auswählen'}
+            </button>
+          )}
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
@@ -174,6 +261,58 @@ export function InboxView({
           )}
         </div>
       </div>
+
+      {/* Aktionsleiste bei Mehrfachauswahl */}
+      {(selectedList.length > 0 || actionMessage) && (
+        <div
+          id="inbox-bulk-bar"
+          className="sticky top-16 z-20 flex flex-wrap items-center gap-3 px-4 py-2.5 rounded-2xl border border-blue-200 dark:border-blue-900 bg-blue-50/95 dark:bg-blue-950/90 backdrop-blur-sm shadow-sm text-xs"
+        >
+          {selectedList.length > 0 && (
+            <>
+              <span className="font-semibold text-blue-800 dark:text-blue-200">
+                {selectedList.length} ausgewählt
+              </span>
+              <select
+                id="inbox-bulk-folder"
+                value={bulkFolderId}
+                onChange={(e) => setBulkFolderId(e.target.value)}
+                className="px-2.5 py-1.5 rounded-lg border border-blue-200 dark:border-blue-800 bg-white dark:bg-zinc-900 text-zinc-800 dark:text-zinc-200 cursor-pointer"
+              >
+                <option value="">In Ordner verschieben…</option>
+                {folders.map((f) => (
+                  <option key={f.id} value={f.id}>
+                    {f.name}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                id="inbox-bulk-move-btn"
+                disabled={!bulkFolderId || busy}
+                onClick={() => fileDocuments(selectedList.map((d) => d.id), parseInt(bulkFolderId, 10))}
+                className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold flex items-center gap-1.5 disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed"
+              >
+                {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FolderInput className="w-3.5 h-3.5" />}
+                Verschieben
+              </button>
+              <button
+                type="button"
+                onClick={() => setSelectedIds(new Set())}
+                className="ml-auto p-1 rounded-lg text-blue-700 dark:text-blue-300 hover:bg-blue-100 dark:hover:bg-blue-900/60 cursor-pointer"
+                title="Auswahl aufheben"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </>
+          )}
+          {actionMessage && (
+            <span id="inbox-action-message" className="text-emerald-700 dark:text-emerald-300 font-medium">
+              {actionMessage}
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Dokumente Kachelraster */}
       {documents.length === 0 ? (
@@ -275,13 +414,42 @@ export function InboxView({
             }
 
             // Normale Kachel (bereit zur Prüfung oder bereits im Eingang)
+            const isSelected = selectedIds.has(doc.id);
+            const suggestedFolder = folders.find((f) => f.id === suggestFolderId(folders, doc.doc_date));
             return (
               <div
                 key={doc.id}
                 id={`doc-card-${doc.id}`}
-                onClick={() => onSelectDocument(doc)}
-                className="group relative rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 hover:border-blue-400 dark:hover:border-blue-600/80 transition-all cursor-pointer overflow-hidden flex flex-col justify-between shadow-xs hover:shadow-md"
+                onClick={(e) => {
+                  // Bei aktiver Auswahl wählt ein Klick (bzw. Shift-Klick) aus statt zu öffnen
+                  if (selectedIds.size > 0 || e.shiftKey) toggleSelect(doc, e.shiftKey);
+                  else onSelectDocument(doc);
+                }}
+                className={`group relative rounded-2xl border bg-white dark:bg-zinc-900 transition-all cursor-pointer overflow-hidden flex flex-col justify-between shadow-xs hover:shadow-md ${
+                  isSelected
+                    ? 'border-blue-500 ring-2 ring-blue-500/40'
+                    : 'border-zinc-200 dark:border-zinc-800 hover:border-blue-400 dark:hover:border-blue-600/80'
+                }`}
               >
+                {/* Auswahl-Checkbox */}
+                <button
+                  type="button"
+                  id={`doc-select-${doc.id}`}
+                  role="checkbox"
+                  aria-checked={isSelected}
+                  aria-label="Beleg auswählen"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    toggleSelect(doc, e.shiftKey);
+                  }}
+                  className={`absolute top-2 left-2 z-10 w-6 h-6 rounded-lg border-2 flex items-center justify-center transition-all cursor-pointer ${
+                    isSelected
+                      ? 'bg-blue-600 border-blue-600 text-white opacity-100'
+                      : 'bg-white/90 dark:bg-zinc-900/90 border-zinc-300 dark:border-zinc-600 text-transparent opacity-0 group-hover:opacity-100'
+                  } ${selectedIds.size > 0 ? 'opacity-100' : ''}`}
+                >
+                  <Check className="w-3.5 h-3.5" />
+                </button>
                 {/* Vorschaubild */}
                 <div className="h-44 bg-zinc-100 dark:bg-zinc-950/80 flex items-center justify-center overflow-hidden relative border-b border-zinc-100 dark:border-zinc-800/80">
                   {doc.thumb_path ? (
@@ -309,7 +477,7 @@ export function InboxView({
                   {/* Duplikat-Badge */}
                   {doc.duplicate_of_id && (
                     <div
-                      className="absolute top-2.5 left-10 bg-amber-500/90 text-white text-[10px] font-semibold px-1.5 py-0.5 rounded-md shadow-xs flex items-center gap-1"
+                      className="absolute top-2.5 left-17 bg-amber-500/90 text-white text-[10px] font-semibold px-1.5 py-0.5 rounded-md shadow-xs flex items-center gap-1"
                       title={`Vermutlich doppelt zu »${doc.duplicate_of_title || 'Dokument #' + doc.duplicate_of_id}«`}
                     >
                       <span>Doppelt?</span>
@@ -341,7 +509,7 @@ export function InboxView({
 
                   {/* Quelle oben links */}
                   <div
-                    className="absolute top-2.5 left-2.5 bg-white/90 dark:bg-zinc-900/90 text-zinc-600 dark:text-zinc-300 p-1 rounded-md shadow-xs"
+                    className="absolute top-2.5 left-10 bg-white/90 dark:bg-zinc-900/90 text-zinc-600 dark:text-zinc-300 p-1 rounded-md shadow-xs"
                     title={doc.source === 'folder' ? 'Aus Upload-Ordner' : 'Per Web hochgeladen'}
                   >
                     {doc.source === 'folder' ? (
@@ -375,6 +543,23 @@ export function InboxView({
                       </div>
                     )}
                   </div>
+
+                  {suggestedFolder && (
+                    <button
+                      type="button"
+                      id={`doc-suggest-file-${doc.id}`}
+                      disabled={busy}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        fileDocuments([doc.id], suggestedFolder.id);
+                      }}
+                      className="mt-2.5 w-full px-2.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-[11px] font-semibold flex items-center justify-center gap-1 transition-colors cursor-pointer disabled:opacity-50"
+                      title="In den vorgeschlagenen Ordner ablegen"
+                    >
+                      <ArrowRight className="w-3 h-3" />
+                      <span className="truncate">{suggestedFolder.name} ablegen</span>
+                    </button>
+                  )}
 
                   {/* Fußzeile mit Erfassungsdatum */}
                   <div className="mt-3 pt-2.5 border-t border-zinc-100 dark:border-zinc-800/80 flex items-center justify-between text-[10px] text-zinc-400">

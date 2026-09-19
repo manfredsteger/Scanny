@@ -3,6 +3,7 @@ import { Sidebar } from './components/Sidebar';
 import { InboxView } from './components/InboxView';
 import { FolderView } from './components/FolderView';
 import { SearchView } from './components/SearchView';
+import { DashboardView } from './components/DashboardView';
 import { SettingsView } from './components/SettingsView';
 import { FolderModal } from './components/FolderModal';
 import { ImportDialog } from './components/ImportDialog';
@@ -24,6 +25,7 @@ import {
   Folder as FolderIcon,
   Sparkles,
   ArrowRight,
+  Search as SearchIcon,
 } from 'lucide-react';
 
 export default function App() {
@@ -36,7 +38,9 @@ export default function App() {
     error: 0,
     filed: 0,
   });
-  const [activeView, setActiveView] = useState<ActiveView>({ type: 'inbox' });
+  const [activeView, setActiveView] = useState<ActiveView>({ type: 'dashboard' });
+  const [searchQuery, setSearchQuery] = useState('');
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const [paths, setPaths] = useState<SystemPaths | null>(null);
   const [health, setHealth] = useState<SystemHealth | null>(null);
 
@@ -161,6 +165,31 @@ export default function App() {
     fetchDocumentsAndStats();
     fetchPathsAndHealth();
   }, [fetchFolders, fetchDocumentsAndStats, fetchPathsAndHealth]);
+
+  // Tastenkürzel "/" fokussiert die globale Suche (nicht beim Tippen in Feldern)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey) return;
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target?.isContentEditable) return;
+      e.preventDefault();
+      searchInputRef.current?.focus();
+      searchInputRef.current?.select();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  // Dokument per ID laden und im Detail-Drawer öffnen (z. B. aus Suchtreffern)
+  const openDocumentById = useCallback(async (id: number) => {
+    try {
+      const res = await fetch(`/api/documents/${id}`);
+      if (res.ok) setSelectedDoc(await res.json());
+    } catch (err) {
+      console.error('Dokument konnte nicht geladen werden:', err);
+    }
+  }, []);
 
   // Polling für Hintergrundverarbeitung (Queue)
   const isQueueActive = stats.queued > 0 || stats.processing > 0;
@@ -429,9 +458,52 @@ export default function App() {
 
       {/* Hauptbereich */}
       <main className="flex-1 h-screen overflow-y-auto">
+        {/* Globale Suche oben */}
+        <div className="sticky top-0 z-30 px-6 md:px-8 py-3 bg-zinc-50/85 dark:bg-zinc-950/85 backdrop-blur-sm border-b border-zinc-200/80 dark:border-zinc-800/80">
+          <div className="relative max-w-xl">
+            <SearchIcon className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
+            <input
+              ref={searchInputRef}
+              id="global-search-input"
+              type="search"
+              value={searchQuery}
+              onChange={(e) => {
+                setSearchQuery(e.target.value);
+                if (e.target.value.trim() && activeView.type !== 'search') setActiveView({ type: 'search' });
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') setActiveView({ type: 'search' });
+                if (e.key === 'Escape') {
+                  setSearchQuery('');
+                  (e.target as HTMLInputElement).blur();
+                }
+              }}
+              placeholder="Belege durchsuchen …"
+              className="w-full pl-10 pr-10 py-2 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl text-sm placeholder:text-zinc-400 focus:outline-hidden focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
+            />
+            <kbd className="absolute right-3 top-1/2 -translate-y-1/2 px-1.5 text-[10px] font-mono text-zinc-400 border border-zinc-200 dark:border-zinc-700 rounded">
+              /
+            </kbd>
+          </div>
+        </div>
+
+        {activeView.type === 'dashboard' && (
+          <DashboardView
+            documents={documents}
+            folders={folders}
+            onOpenInbox={() => setActiveView({ type: 'inbox' })}
+            onOpenFolder={(folderId) => setActiveView({ type: 'folder', folderId })}
+            onSelectDocument={(doc) => setSelectedDoc(doc)}
+          />
+        )}
         {activeView.type === 'inbox' && (
           <InboxView
             documents={inboxDocuments}
+            folders={folders}
+            onRefresh={async () => {
+              await fetchDocumentsAndStats();
+              await fetchFolders();
+            }}
             paths={paths}
             onOpenImportDialog={(docs) => {
               setImportBatchDocs(docs || inboxDocuments);
@@ -474,7 +546,9 @@ export default function App() {
           </div>
         )}
 
-        {activeView.type === 'search' && <SearchView folders={folders} />}
+        {activeView.type === 'search' && (
+          <SearchView folders={folders} query={searchQuery} onOpenDocument={openDocumentById} />
+        )}
 
         {activeView.type === 'settings' && <SettingsView paths={paths} health={health} />}
       </main>

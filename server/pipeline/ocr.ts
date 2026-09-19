@@ -118,41 +118,51 @@ export function archiveDirForFolder(folderId: number | null | undefined): string
   return path.join(paths.archiveDir, '_Eingang');
 }
 
+export interface ArchivePdfValues {
+  title: string | null;
+  doc_date: string | null;
+  folder_id: number | null;
+  pdf_path: string | null;
+  original_name: string | null;
+  created_at: string | null;
+}
+
+/**
+ * Ziel-Pfad des Archiv-PDFs für die übergebenen Werte (Ordner, Titel, Datum).
+ * Liefert null, wenn es (noch) kein PDF gibt. Legt das Zielverzeichnis bei Bedarf an.
+ */
+export function planArchivePdf(values: ArchivePdfValues): string | null {
+  if (!values.pdf_path || !fs.existsSync(values.pdf_path)) return null;
+
+  const targetDir = archiveDirForFolder(values.folder_id);
+  if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
+
+  const dateStr =
+    values.doc_date && /^\d{4}-\d{2}-\d{2}$/.test(values.doc_date.trim())
+      ? values.doc_date.trim()
+      : localDateString(values.created_at);
+  const titleToUse =
+    (values.title && values.title.trim()) || (values.original_name ? path.parse(values.original_name).name : 'Beleg');
+
+  return determineArchivePdfPath(targetDir, dateStr, titleToUse, values.pdf_path);
+}
+
 /**
  * Bringt das Archiv-PDF eines Dokuments in Einklang mit den aktuellen DB-Werten
- * (Ordner, Titel, Datum): verschiebt/benennt die Datei bei Bedarf um und speichert pdf_path.
+ * (Ordner, Titel, Datum): erst Datei verschieben/umbenennen, dann pdf_path speichern.
  * Liefert den (neuen) Pfad oder null, wenn es (noch) kein PDF gibt.
  */
 export function syncArchivePdf(id: number): string | null {
   const db = getDb();
   const doc = db
     .prepare('SELECT title, doc_date, folder_id, pdf_path, original_name, created_at FROM documents WHERE id = ?')
-    .get(id) as
-    | {
-        title: string | null;
-        doc_date: string | null;
-        folder_id: number | null;
-        pdf_path: string | null;
-        original_name: string | null;
-        created_at: string | null;
-      }
-    | undefined;
-  if (!doc?.pdf_path || !fs.existsSync(doc.pdf_path)) return doc?.pdf_path ?? null;
+    .get(id) as ArchivePdfValues | undefined;
+  if (!doc) return null;
 
-  const targetDir = archiveDirForFolder(doc.folder_id);
-  if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
+  const newPath = planArchivePdf(doc);
+  if (!newPath || newPath === doc.pdf_path) return newPath ?? doc.pdf_path;
 
-  const dateStr =
-    doc.doc_date && /^\d{4}-\d{2}-\d{2}$/.test(doc.doc_date.trim())
-      ? doc.doc_date.trim()
-      : localDateString(doc.created_at);
-  const titleToUse =
-    (doc.title && doc.title.trim()) || (doc.original_name ? path.parse(doc.original_name).name : 'Beleg');
-
-  const newPath = determineArchivePdfPath(targetDir, dateStr, titleToUse, doc.pdf_path);
-  if (newPath === doc.pdf_path) return newPath;
-
-  moveOrCopySync(doc.pdf_path, newPath);
+  moveOrCopySync(doc.pdf_path!, newPath);
   db.prepare('UPDATE documents SET pdf_path = ? WHERE id = ?').run(newPath, id);
   return newPath;
 }

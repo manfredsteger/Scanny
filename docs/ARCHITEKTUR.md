@@ -80,3 +80,24 @@ Entwickler müssen die folgenden 8 Regeln zwingend beachten:
 6. **Alles lokal**: Keine Cloud-Dienste, keine Cloud-KI (z. B. Gemini, OpenAI), keine externen Web-APIs mit Dokumenteninhalten und keine CDN-Abhängigkeiten zur Laufzeit. Private Steuerbelege bleiben zu 100% auf dem Rechner des Nutzers.
 7. **Dateisystem zuerst, dann DB**: Bei Datei- und Ordneroperationen (Erstellen, Umbenennen, Verschieben, Löschen) wird immer zuerst die Dateisystem-Operation ausgeführt und validiert. Erst bei fehlerfreiem Erfolg wird der entsprechende Datenbank-Eintrag aktualisiert oder angelegt. Dateisystem-Fehler niemals verschlucken, sondern mit aussagekräftiger Meldung als HTTP-Fehlerstatus (409 oder 500) beantworten.
 8. **Dokumentenecken (corners) und Drehung**: Die gespeicherten Ecken (`corners`) beziehen sich IMMER auf das bereits gedrehte Arbeitsbild (nach Anwendung von `rotation`). Ändert sich die Drehung (`rotation`), werden gespeicherte `corners` in der Datenbank zurückgesetzt (`NULL`, automatische Neuerkennung), sofern nicht explizit neue Ecken im selben Aufruf übergeben werden.
+
+---
+
+## 5. Erkennung, Ablage & Suche (Schritt 5)
+
+- **Erkennung** läuft nach der OCR in `processDocument.ts` (`applyDetection`), rein regelbasiert:
+  - `server/pipeline/classifyRules.ts` – Stichwörter + Gewichte je Dokumenttyp (hier erweitern).
+  - `server/pipeline/classify.ts` – Punktwertung, OCR-tolerant, Sicherheit + Zweitvorschlag.
+  - `server/pipeline/extract.ts` – Datum, Betrag, Absender inkl. Fundstellen (`span`) im OCR-Text.
+  - `server/pipeline/title.ts` – Titel-Vorschlag; wird **auch vom Frontend** importiert (keine Imports darin).
+  - Ergebnis als JSON in `documents.extraction`. Gesetzt werden nur Felder, die **nicht** in `user_edited` stehen.
+- **Archiv-PDF**: Ziel = `Archiv/<Ordner>/` bzw. `Archiv/_Eingang/`, Name `YYYY-MM-DD Titel.pdf`.
+  `planArchivePdf()` berechnet das Ziel, `syncArchivePdf(id)` gleicht nach DB-Werten ab.
+  PATCH verschiebt **zuerst** die Datei und schreibt erst danach die DB (Regel 7).
+- **Ablegen**: `POST /api/documents/:id/file`, `/unfile` und `/file-bulk` sind dünne Hüllen um `patchDocument()`
+  – es gibt nur eine Stelle, die Ordner, Status und Archiv-PDF ändert.
+- **Automatisch ablegen**: Einstellung `auto_file` (Standard aus); nur bei sicher erkanntem Datum und passendem
+  Steuerjahr-/Jahr-Ordner.
+- **Suche**: `GET /api/search` (FTS5, bm25, `snippet()` mit Steuerzeichen `\u0001…\u0002` als Markierung).
+  Nutzereingaben immer über `buildFtsQuery()` (`server/search.ts`) escapen.
+- **Tests**: `npm test` (vitest) – `server/**/*.test.ts`, vom Server-Build ausgeschlossen.

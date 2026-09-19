@@ -36,6 +36,7 @@ settingsRouter.get('/settings', (req: Request, res: Response) => {
     const rows = db.prepare('SELECT key, value FROM settings').all() as { key: string; value: string }[];
     const settingsMap: Record<string, string> = {
       default_color_mode: 'bw',
+      auto_file: 'false',
     };
     for (const row of rows) {
       settingsMap[row.key] = row.value;
@@ -51,7 +52,18 @@ settingsRouter.get('/settings', (req: Request, res: Response) => {
 settingsRouter.patch('/settings', (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const { default_color_mode } = req.body;
+    const { default_color_mode, auto_file } = req.body;
+
+    if (auto_file !== undefined) {
+      const value = auto_file === true || auto_file === 'true' ? 'true' : auto_file === false || auto_file === 'false' ? 'false' : null;
+      if (value === null) {
+        return res.status(400).json({ error: 'auto_file muss true oder false sein.' });
+      }
+      db.prepare(`
+        INSERT INTO settings (key, value) VALUES ('auto_file', ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+      `).run(value);
+    }
 
     if (default_color_mode !== undefined) {
       if (!['bw', 'gray', 'color'].includes(default_color_mode)) {
@@ -66,6 +78,7 @@ settingsRouter.patch('/settings', (req: Request, res: Response) => {
     const rows = db.prepare('SELECT key, value FROM settings').all() as { key: string; value: string }[];
     const settingsMap: Record<string, string> = {
       default_color_mode: 'bw',
+      auto_file: 'false',
     };
     for (const row of rows) {
       settingsMap[row.key] = row.value;

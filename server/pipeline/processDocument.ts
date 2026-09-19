@@ -117,7 +117,7 @@ function parseUserEdited(raw: string | null | undefined): Set<string> {
 export function applyDetection(id: number, layout: string | null): void {
   const db = getDb();
   const doc = db
-    .prepare('SELECT ocr_text, title, doc_type, sender, doc_date, user_edited FROM documents WHERE id = ?')
+    .prepare('SELECT ocr_text, title, doc_type, sender, doc_date, user_edited, folder_id, status FROM documents WHERE id = ?')
     .get(id) as
     | {
         ocr_text: string | null;
@@ -126,6 +126,8 @@ export function applyDetection(id: number, layout: string | null): void {
         sender: string | null;
         doc_date: string | null;
         user_edited: string | null;
+        folder_id: number | null;
+        status: string;
       }
     | undefined;
   if (!doc) return;
@@ -153,6 +155,20 @@ export function applyDetection(id: number, layout: string | null): void {
     if (title) updates.title = title;
   }
 
+  // Automatisch ablegen (Einstellung auto_file, Standard AUS): nur bei sicher erkanntem Datum,
+  // wenn der Nutzer keinen Ordner gewählt hat und ein passender Jahres-Ordner existiert
+  const autoFile = (db.prepare("SELECT value FROM settings WHERE key = 'auto_file'").get() as
+    | { value: string }
+    | undefined)?.value === 'true';
+  if (autoFile && !edited.has('folder_id') && doc.folder_id === null && det.date && det.dateConfidence >= 0.9) {
+    const date = (updates.doc_date as string | undefined) ?? doc.doc_date;
+    const folderId = date ? suggestFolderIdForDate(date) : null;
+    if (folderId !== null) {
+      updates.folder_id = folderId;
+      updates.status = 'filed';
+    }
+  }
+
   const columns = Object.keys(updates);
   const setSql = columns.map((c) => `${c} = ?`).join(', ');
   db.prepare(
@@ -167,6 +183,19 @@ export function applyDetection(id: number, layout: string | null): void {
     `[Erkennung] Dokument ${id}: ${det.type} (${det.typeConfidence}), Datum ${det.date ?? '–'}, ` +
       `Betrag ${det.amountCents ?? '–'}, Absender ${det.sender ?? '–'}`
   );
+}
+
+/** Ordner-Vorschlag zum Datum: Steuerjahr-Ordner des Jahres, sonst Jahr-Ordner. */
+export function suggestFolderIdForDate(isoDate: string): number | null {
+  const year = parseInt(isoDate.slice(0, 4), 10);
+  if (isNaN(year)) return null;
+  const row = getDb()
+    .prepare(
+      `SELECT id FROM folders WHERE year = ? AND kind IN ('steuerjahr', 'jahr')
+       ORDER BY CASE kind WHEN 'steuerjahr' THEN 0 ELSE 1 END LIMIT 1`
+    )
+    .get(year) as { id: number } | undefined;
+  return row ? row.id : null;
 }
 
 function runDetectionSafely(id: number, layout: string | null): void {

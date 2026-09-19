@@ -6,7 +6,8 @@ import sharp from 'sharp';
 import { getDb, paths } from '../db.js';
 import { ingestFile } from '../pipeline/ingest.js';
 import { documentQueue } from '../pipeline/queue.js';
-import { syncArchivePdf } from '../pipeline/ocr.js';
+import { moveOrCopySync, planArchivePdf } from '../pipeline/ocr.js';
+import { buildFtsQuery, SNIPPET_END, SNIPPET_START } from '../search.js';
 
 export const documentsRouter = Router();
 
@@ -170,14 +171,7 @@ documentsRouter.get('/documents', (req: Request, res: Response) => {
 
     if (q && typeof q === 'string' && q.trim()) {
       const cleanQ = q.trim();
-      // Jedes Wort als FTS5-Phrase quoten (Präfixsuche), damit - : ( ) AND/OR keinen Syntaxfehler auslösen
-      const ftsTerm =
-        cleanQ
-          .split(/\s+/)
-          .map((w) => w.replace(/"/g, ''))
-          .filter(Boolean)
-          .map((w) => `"${w}"*`)
-          .join(' ') || '""';
+      const ftsTerm = buildFtsQuery(cleanQ);
       const likeTerm = `%${cleanQ}%`;
       conditions.push(`(
         d.id IN (SELECT rowid FROM documents_fts WHERE documents_fts MATCH ?)
@@ -384,6 +378,52 @@ documentsRouter.get('/documents/:id/scan', (req: Request, res: Response) => {
   }
 });
 
+// GET /api/search?q=...&folder_id=...&doc_type=... -> Volltextsuche mit bm25-Ranking und Textausschnitt
+documentsRouter.get('/search', (req: Request, res: Response) => {
+  try {
+    const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+    if (!q) return res.json([]);
+
+    const conditions = ['documents_fts MATCH ?'];
+    const params: any[] = [buildFtsQuery(q)];
+
+    const folderId = typeof req.query.folder_id === 'string' ? req.query.folder_id : '';
+    if (folderId === 'inbox') {
+      conditions.push('d.folder_id IS NULL');
+    } else if (folderId && !isNaN(parseInt(folderId, 10))) {
+      conditions.push('d.folder_id = ?');
+      params.push(parseInt(folderId, 10));
+    }
+    const docType = typeof req.query.doc_type === 'string' ? req.query.doc_type : '';
+    if (docType) {
+      conditions.push('d.doc_type = ?');
+      params.push(docType);
+    }
+
+    const rows = getDb()
+      .prepare(
+        `SELECT
+           d.id, d.title, d.original_name, d.doc_date, d.doc_type, d.sender, d.amount_cents,
+           d.status, d.folder_id, d.page_count, d.updated_at,
+           f.name AS folder_name, f.kind AS folder_kind, f.color AS folder_color,
+           snippet(documents_fts, -1, ?, ?, ' … ', 14) AS snippet,
+           bm25(documents_fts, 10.0, 5.0, 1.0) AS rank
+         FROM documents_fts
+         JOIN documents d ON d.id = documents_fts.rowid
+         LEFT JOIN folders f ON f.id = d.folder_id
+         WHERE ${conditions.join(' AND ')}
+         ORDER BY rank
+         LIMIT 100`
+      )
+      .all(SNIPPET_START, SNIPPET_END, ...params);
+
+    res.json(rows);
+  } catch (error: any) {
+    console.error('Fehler bei der Suche:', error);
+    res.status(500).json({ error: 'Suche fehlgeschlagen.' });
+  }
+});
+
 // GET /api/documents/:id/pdf -> Liefert das durchsuchbare PDF/A inline für die Vorschau im Browser
 documentsRouter.get('/documents/:id/pdf', (req: Request, res: Response) => {
   try {
@@ -459,17 +499,21 @@ documentsRouter.get('/documents/:id/work-preview', async (req: Request, res: Res
 });
 
 // PATCH /api/documents/:id -> Metadaten aktualisieren (Titel, Datum, Absender, Typ, Ordner, Betrag, Farbmodus, Drehung)
-documentsRouter.patch('/documents/:id', async (req: Request, res: Response) => {
-  try {
-    const id = parseInt(req.params.id, 10);
-    if (isNaN(id)) {
-      return res.status(400).json({ error: 'Ungültige Dokument-ID.' });
-    }
+export interface PatchResult {
+  code: number;
+  body: any;
+}
 
+/**
+ * Kern von PATCH /api/documents/:id – auch von /file, /unfile und /file-bulk genutzt,
+ * damit es nur EINE Stelle gibt, die Ordner/Status/Archiv-PDF ändert.
+ */
+export function patchDocument(id: number, input: any): PatchResult {
+  try {
     const db = getDb();
     const existing = db.prepare('SELECT * FROM documents WHERE id = ?').get(id) as any;
     if (!existing) {
-      return res.status(404).json({ error: 'Dokument nicht gefunden.' });
+      return { code: 404, body: { error: 'Dokument nicht gefunden.' } };
     }
 
     const {
@@ -485,7 +529,7 @@ documentsRouter.patch('/documents/:id', async (req: Request, res: Response) => {
       rotation,
       corners,
       reprocess,
-    } = req.body;
+    } = input || {};
 
     const finalTitle = title !== undefined ? title : existing.title;
     const finalDocDate = doc_date !== undefined ? doc_date : existing.doc_date;
@@ -513,12 +557,12 @@ documentsRouter.patch('/documents/:id', async (req: Request, res: Response) => {
       } else {
         const folderIdNum = parseInt(folder_id, 10);
         if (isNaN(folderIdNum)) {
-          return res.status(400).json({ error: 'Ungültige folder_id.' });
+          return { code: 400, body: { error: 'Ungültige folder_id.' } };
         }
         // Ordner-Existenz prüfen
         const folderExists = db.prepare('SELECT id FROM folders WHERE id = ?').get(folderIdNum);
         if (!folderExists) {
-          return res.status(400).json({ error: `Zielordner ${folderIdNum} existiert nicht.` });
+          return { code: 400, body: { error: `Zielordner ${folderIdNum} existiert nicht.` } };
         }
         finalFolderId = folderIdNum;
       }
@@ -529,6 +573,31 @@ documentsRouter.patch('/documents/:id', async (req: Request, res: Response) => {
     let finalStatus = existing.status;
     if (existing.status === 'inbox' || existing.status === 'filed') {
       finalStatus = finalFolderId !== null ? 'filed' : 'inbox';
+    }
+
+    // DATEISYSTEM ZUERST (Regel 7): Archiv-PDF an Ordner/Titel/Datum anpassen, erst danach die DB
+    let finalPdfPath = existing.pdf_path;
+    if (folder_id !== undefined || title !== undefined || doc_date !== undefined) {
+      try {
+        const target = planArchivePdf({
+          title: finalTitle,
+          doc_date: finalDocDate,
+          folder_id: finalFolderId,
+          pdf_path: existing.pdf_path,
+          original_name: existing.original_name,
+          created_at: existing.created_at,
+        });
+        if (target && target !== existing.pdf_path) {
+          moveOrCopySync(existing.pdf_path, target);
+          finalPdfPath = target;
+        }
+      } catch (fsErr: any) {
+        console.error(`Archiv-PDF von Dokument ${id} konnte nicht verschoben werden:`, fsErr);
+        return {
+          code: 500,
+          body: { error: `Archiv-PDF konnte nicht verschoben werden: ${fsErr?.message || fsErr}` },
+        };
+      }
     }
 
     db.prepare(`
@@ -544,6 +613,7 @@ documentsRouter.patch('/documents/:id', async (req: Request, res: Response) => {
           color_mode = ?,
           rotation = ?,
           corners = ?,
+          pdf_path = ?,
           updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
       WHERE id = ?
     `).run(
@@ -558,17 +628,9 @@ documentsRouter.patch('/documents/:id', async (req: Request, res: Response) => {
       finalColorMode,
       finalRotation,
       finalCorners,
+      finalPdfPath,
       id
     );
-
-    // Archiv-PDF an Ordner/Titel/Datum anpassen (verschieben bzw. umbenennen)
-    if (folder_id !== undefined || title !== undefined || doc_date !== undefined) {
-      try {
-        syncArchivePdf(id);
-      } catch (fsErr) {
-        console.error(`Archiv-PDF von Dokument ${id} konnte nicht verschoben werden:`, fsErr);
-      }
-    }
 
     // Falls Farbmodus, Drehung oder Ecken geändert wurden oder reprocess angefordert wurde,
     // Bild neu aufbereiten (asynchron über Queue)
@@ -601,11 +663,82 @@ documentsRouter.patch('/documents/:id', async (req: Request, res: Response) => {
       `)
       .get(id);
 
-    res.json(updated);
+    return { code: 200, body: updated };
   } catch (error: any) {
     console.error('Fehler beim Aktualisieren des Dokuments:', error);
-    res.status(500).json({ error: 'Dokument konnte nicht aktualisiert werden.' });
+    return { code: 500, body: { error: 'Dokument konnte nicht aktualisiert werden.' } };
   }
+}
+
+function parseId(raw: string): number | null {
+  const id = parseInt(raw, 10);
+  return isNaN(id) ? null : id;
+}
+
+/** user_edited um ein Feld ergänzen (JSON-Array-String). */
+function withEditedField(raw: string | null, field: string): string {
+  let list: string[] = [];
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw);
+      list = Array.isArray(parsed) ? parsed.map(String) : [];
+    } catch {
+      list = raw.split(',').map((s) => s.trim()).filter(Boolean);
+    }
+  }
+  if (!list.includes(field)) list.push(field);
+  return JSON.stringify(list);
+}
+
+function fileDocument(id: number, folderId: number | null): PatchResult {
+  const existing = getDb().prepare('SELECT user_edited FROM documents WHERE id = ?').get(id) as
+    | { user_edited: string | null }
+    | undefined;
+  if (!existing) return { code: 404, body: { error: 'Dokument nicht gefunden.' } };
+  return patchDocument(id, {
+    folder_id: folderId,
+    user_edited: withEditedField(existing.user_edited, 'folder_id'),
+  });
+}
+
+documentsRouter.patch('/documents/:id', (req: Request, res: Response) => {
+  const id = parseId(req.params.id);
+  if (id === null) return res.status(400).json({ error: 'Ungültige Dokument-ID.' });
+  const result = patchDocument(id, req.body);
+  res.status(result.code).json(result.body);
+});
+
+// POST /api/documents/:id/file { folder_id } -> in Ordner ablegen (PDF wandert nach Archiv/<Ordner>/)
+documentsRouter.post('/documents/:id/file', (req: Request, res: Response) => {
+  const id = parseId(req.params.id);
+  if (id === null) return res.status(400).json({ error: 'Ungültige Dokument-ID.' });
+  const folderId = req.body?.folder_id;
+  if (folderId === undefined || folderId === null || folderId === '') {
+    return res.status(400).json({ error: 'Bitte einen Zielordner angeben (folder_id).' });
+  }
+  const result = fileDocument(id, folderId);
+  res.status(result.code).json(result.body);
+});
+
+// POST /api/documents/:id/unfile -> zurück in den Eingang (PDF wandert nach Archiv/_Eingang/)
+documentsRouter.post('/documents/:id/unfile', (req: Request, res: Response) => {
+  const id = parseId(req.params.id);
+  if (id === null) return res.status(400).json({ error: 'Ungültige Dokument-ID.' });
+  const result = fileDocument(id, null);
+  res.status(result.code).json(result.body);
+});
+
+// POST /api/documents/file-bulk { ids: number[], folder_id: number | null } -> Mehrfachauswahl verschieben
+documentsRouter.post('/documents/file-bulk', (req: Request, res: Response) => {
+  const ids = Array.isArray(req.body?.ids) ? req.body.ids.map((v: any) => parseInt(v, 10)).filter((v: number) => !isNaN(v)) : [];
+  if (ids.length === 0) return res.status(400).json({ error: 'Keine Dokumente ausgewählt.' });
+  const folderId = req.body?.folder_id ?? null;
+  const results = ids.map((id: number) => {
+    const r = fileDocument(id, folderId);
+    return { id, ok: r.code === 200, error: r.code === 200 ? undefined : r.body?.error };
+  });
+  const failed = results.filter((r: { ok: boolean }) => !r.ok);
+  res.status(failed.length === results.length ? 400 : 200).json({ results, moved: results.length - failed.length });
 });
 
 // POST /api/documents/:id/retry -> Fehlerhafte Dokumente wieder einreihen
