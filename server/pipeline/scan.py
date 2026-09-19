@@ -285,19 +285,17 @@ def main():
             work_img = cv2.resize(warped, (fit_w, fit_h), interpolation=interp)
 
         # 6. Schattenausgleich & Farbmodus auf das bereits skalierte Bild anwenden
-        cur_w = work_img.shape[1]
-
-        # Kernel-Größen relativ zur Bildbreite wählen:
-        # dilate ca. Breite/350, ungerade, mind. 7
-        d_k = int(round(cur_w / 350.0))
+        # Kernel-Größen aus der A4-Seitenbreite berechnen:
+        # d_k = a4_w / 100 (ungerade, mind. 7)
+        d_k = int(round(a4_w / 100.0))
         if d_k % 2 == 0:
             d_k += 1
         if d_k < 7:
             d_k = 7
         k_bg = cv2.getStructuringElement(cv2.MORPH_RECT, (d_k, d_k))
 
-        # medianBlur ca. Breite/120, ungerade, mind. 21
-        m_k = int(round(cur_w / 120.0))
+        # m_k = a4_w / 60 (ungerade, mind. 21)
+        m_k = int(round(a4_w / 60.0))
         if m_k % 2 == 0:
             m_k += 1
         if m_k < 21:
@@ -320,7 +318,7 @@ def main():
             if block_size < 15:
                 block_size = 15
 
-            thresh = cv2.adaptiveThreshold(
+            thresh_adaptive = cv2.adaptiveThreshold(
                 normalized_gray,
                 255,
                 cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
@@ -328,6 +326,16 @@ def main():
                 block_size,
                 10
             )
+
+            # Globaler Otsu-Schwellwert auf normalized_gray und mit adaptivem Ergebnis kombinieren
+            # (cv2.bitwise_and: schwarz, wenn einer von beiden schwarz sagt)
+            _, thresh_otsu = cv2.threshold(
+                normalized_gray,
+                0,
+                255,
+                cv2.THRESH_BINARY + cv2.THRESH_OTSU
+            )
+            thresh = cv2.bitwise_and(thresh_adaptive, thresh_otsu)
 
             # kleine Punkte entfernen (connectedComponentsWithStats, Komponenten < 12 px Fläche weiß machen)
             inv = cv2.bitwise_not(thresh)
