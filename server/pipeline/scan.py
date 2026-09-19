@@ -229,11 +229,11 @@ def main():
         M = cv2.getPerspectiveTransform(ordered_corners, dst)
         warped = cv2.warpPerspective(img, M, (target_w, target_h), flags=cv2.INTER_CUBIC)
 
-        # Nach warpPerspective rundum 1 % des Randes abschneiden (nur wenn detected),
+        # Nach warpPerspective mind. 12 px bzw. 1 % des Randes je Seite abschneiden (nur wenn detected),
         # um verbleibende Papierkantenlinien sauber zu entfernen
         if detected:
-            crop_x = int(round(target_w * 0.01))
-            crop_y = int(round(target_h * 0.01))
+            crop_x = max(int(round(target_w * 0.01)), 12)
+            crop_y = max(int(round(target_h * 0.01)), 12)
             if target_w > 2 * crop_x + 10 and target_h > 2 * crop_y + 10:
                 warped = warped[crop_y:target_h - crop_y, crop_x:target_w - crop_x]
 
@@ -313,8 +313,8 @@ def main():
 
         if args.mode == "bw":
             # adaptiveThreshold (ADAPTIVE_THRESH_GAUSSIAN_C, THRESH_BINARY,
-            # blockSize abhängig von der Bildbreite: ca. breite/80, ungerade, mind. 15; C = 10)
-            block_size = int(round(cur_w / 80.0))
+            # blockSize aus der A4-Seitenbreite berechnen: a4_w / 80, ungerade, mind. 15; C = 10)
+            block_size = int(round(a4_w / 80.0))
             if block_size % 2 == 0:
                 block_size += 1
             if block_size < 15:

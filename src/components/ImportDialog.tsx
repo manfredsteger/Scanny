@@ -500,7 +500,7 @@ export function ImportDialog({
                         <img
                           src={`/api/documents/${doc.id}/thumb?v=${encodeURIComponent(doc.updated_at || '')}`}
                           alt=""
-                          className="w-full h-full object-cover"
+                          className="w-full h-full object-cover object-top"
                         />
                       ) : (
                         <FileText className="w-5 h-5 text-zinc-400" />

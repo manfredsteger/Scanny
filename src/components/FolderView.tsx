@@ -187,7 +187,7 @@ export function FolderView({
                     <img
                       src={`/api/documents/${doc.id}/thumb?v=${encodeURIComponent(doc.updated_at || '')}`}
                       alt={doc.title || doc.original_name}
-                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
+                      className="w-full h-full object-cover object-top group-hover:scale-105 transition-transform duration-200"
                     />
                   ) : (
                     <div className="flex flex-col items-center justify-center text-zinc-400 dark:text-zinc-500">
