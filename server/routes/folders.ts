@@ -328,12 +328,14 @@ foldersRouter.put('/folders/:id', (req: Request, res: Response) => {
     `).run(finalName, finalKind, finalYear, finalColor, id);
 
     // Falls der Ordnername geändert wurde, die Pfade der PDFs der enthaltenen Dokumente anpassen
-    if (nameChanged) {
+    if (finalName !== existing.name) {
+      const oldPrefix = path.join(paths.archiveDir, existing.name) + path.sep;
+      const newPrefix = path.join(paths.archiveDir, finalName) + path.sep;
       db.prepare(`
         UPDATE documents
-        SET pdf_path = REPLACE(pdf_path, ?, ?)
-        WHERE folder_id = ? AND pdf_path IS NOT NULL
-      `).run(oldPath, newPath, id);
+        SET pdf_path = ? || substr(pdf_path, ?)
+        WHERE folder_id = ? AND substr(pdf_path, 1, ?) = ?
+      `).run(newPrefix, oldPrefix.length + 1, id, oldPrefix.length, oldPrefix);
     }
 
     // Zählung der abgelegten Dokumente abrufen

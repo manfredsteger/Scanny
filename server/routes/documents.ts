@@ -170,7 +170,14 @@ documentsRouter.get('/documents', (req: Request, res: Response) => {
 
     if (q && typeof q === 'string' && q.trim()) {
       const cleanQ = q.trim();
-      const ftsTerm = cleanQ.replace(/['"*]/g, '') + '*';
+      // Jedes Wort als FTS5-Phrase quoten (Präfixsuche), damit - : ( ) AND/OR keinen Syntaxfehler auslösen
+      const ftsTerm =
+        cleanQ
+          .split(/\s+/)
+          .map((w) => w.replace(/"/g, ''))
+          .filter(Boolean)
+          .map((w) => `"${w}"*`)
+          .join(' ') || '""';
       const likeTerm = `%${cleanQ}%`;
       conditions.push(`(
         d.id IN (SELECT rowid FROM documents_fts WHERE documents_fts MATCH ?)

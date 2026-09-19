@@ -214,6 +214,45 @@ export async function runOcrPipeline(options: OcrPipelineOptions): Promise<OcrPi
     }
   }
 
+  // Bei PDF-Eingängen steht im Sidecar für Seiten mit vorhandenem Text nur "[OCR skipped on page(s) 1-2]".
+  // Diese Platzhalter durch den vorhandenen Text der Originalseiten ersetzen (Ghostscript txtwrite).
+  if (isPdf && ocrText && ocrText.includes('[OCR skipped on page')) {
+    const markerRe = /\[OCR skipped on page\(s\) (\d+)(?:-(\d+))?\]/g;
+    const parts: string[] = [];
+    let lastIndex = 0;
+    for (const m of ocrText.matchAll(markerRe)) {
+      parts.push(ocrText.slice(lastIndex, m.index));
+      const first = m[1];
+      const last = m[2] || m[1];
+      try {
+        const { stdout } = await execFileAsync(
+          'gs',
+          ['-q', '-sDEVICE=txtwrite', `-dFirstPage=${first}`, `-dLastPage=${last}`, '-o', '-', inputPath],
+          { timeout: 60000, maxBuffer: 20 * 1024 * 1024 }
+        );
+        parts.push(
+          stdout
+            .split('\n')
+            .map((line) => line.trim())
+            .join('\n')
+            .replace(/\n{3,}/g, '\n\n')
+            .trim()
+        );
+      } catch (gsErr) {
+        console.warn(`[OCR] Konnte vorhandenen Text (Seiten ${first}-${last}) aus PDF ${id} nicht lesen:`, gsErr);
+      }
+      lastIndex = (m.index ?? 0) + m[0].length;
+    }
+    parts.push(ocrText.slice(lastIndex));
+    const merged = parts.join('').trim();
+    ocrText = merged.length > 0 ? merged : null;
+  }
+
+  // Seitenumbrüche (Form Feed) im Sidecar als Leerzeile darstellen
+  if (ocrText) {
+    ocrText = ocrText.replace(/\s*\f\s*/g, '\n\n').trim() || null;
+  }
+
   // 2. Seitenzahl mit pdf-lib auslesen
   let pageCount = 1;
   try {
@@ -226,6 +265,16 @@ export async function runOcrPipeline(options: OcrPipelineOptions): Promise<OcrPi
 
   // 3. Zielverzeichnis im Archiv bestimmen
   const db = getDb();
+  // Titel/Datum/Ordner frisch aus der DB lesen: sie können während der OCR geändert worden sein
+  const fresh = db
+    .prepare('SELECT title, doc_date, folder_id, pdf_path FROM documents WHERE id = ?')
+    .get(id) as { title: string | null; doc_date: string | null; folder_id: number | null; pdf_path: string | null } | undefined;
+  if (fresh) {
+    options.title = fresh.title;
+    options.docDate = fresh.doc_date;
+    options.folderId = fresh.folder_id;
+    options.currentPdfPath = fresh.pdf_path;
+  }
   let targetDir: string;
   if (options.folderId) {
     const folder = db

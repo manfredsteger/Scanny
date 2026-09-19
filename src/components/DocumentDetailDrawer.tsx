@@ -92,6 +92,30 @@ export function DocumentDetailDrawer({
     setSavedSuccess(false);
   }, [document?.id]);
 
+  // Polling wenn das Dokument neu aufbereitet wird
+  useEffect(() => {
+    if (!localDoc || (localDoc.status !== 'queued' && localDoc.status !== 'processing')) {
+      return;
+    }
+
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/documents/${localDoc.id}`);
+        if (res.ok) {
+          const fresh = await res.json();
+          setLocalDoc(fresh);
+          if (fresh.status !== 'queued' && fresh.status !== 'processing') {
+            onRefresh();
+          }
+        }
+      } catch (err) {
+        console.error('Fehler beim Pollen des Dokuments:', err);
+      }
+    }, 1200);
+
+    return () => clearInterval(interval);
+  }, [localDoc?.id, localDoc?.status, onRefresh]);
+
   if (!document) return null;
 
   const handleSave = async () => {
@@ -141,30 +165,6 @@ export function DocumentDetailDrawer({
       setIsDeleting(false);
     }
   };
-
-  // Polling wenn das Dokument neu aufbereitet wird
-  useEffect(() => {
-    if (!localDoc || (localDoc.status !== 'queued' && localDoc.status !== 'processing')) {
-      return;
-    }
-
-    const interval = setInterval(async () => {
-      try {
-        const res = await fetch(`/api/documents/${localDoc.id}`);
-        if (res.ok) {
-          const fresh = await res.json();
-          setLocalDoc(fresh);
-          if (fresh.status !== 'queued' && fresh.status !== 'processing') {
-            onRefresh();
-          }
-        }
-      } catch (err) {
-        console.error('Fehler beim Pollen des Dokuments:', err);
-      }
-    }, 1200);
-
-    return () => clearInterval(interval);
-  }, [localDoc?.id, localDoc?.status, onRefresh]);
 
   // Schnellaktion: Drehung ändern ("↺ 90°", "↻ 90°")
   const handleRotate = async (direction: 'cw' | 'ccw') => {
