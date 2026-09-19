@@ -24,6 +24,16 @@ export function moveOrCopySync(src: string, dest: string): void {
 }
 
 /**
+ * Liefert YYYY-MM-DD in lokaler Zeit (TZ des Containers), nicht UTC.
+ */
+export function localDateString(iso?: string | null): string {
+  const d = iso ? new Date(iso) : new Date();
+  const valid = isNaN(d.getTime()) ? new Date() : d;
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${valid.getFullYear()}-${pad(valid.getMonth() + 1)}-${pad(valid.getDate())}`;
+}
+
+/**
  * Bereinigt einen Titel für das Dateisystem (keine ungültigen Zeichen, max. 120 Zeichen gesamt).
  */
 export function sanitizeFilenameTitle(rawTitle: string): string {
@@ -297,9 +307,7 @@ export async function runOcrPipeline(options: OcrPipelineOptions): Promise<OcrPi
   const dateStr =
     options.docDate && /^\d{4}-\d{2}-\d{2}$/.test(options.docDate.trim())
       ? options.docDate.trim()
-      : options.createdAt
-      ? options.createdAt.slice(0, 10)
-      : new Date().toISOString().slice(0, 10);
+      : localDateString(options.createdAt);
 
   const titleToUse =
     (options.title && options.title.trim()) ||

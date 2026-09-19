@@ -6,7 +6,7 @@ import sharp from 'sharp';
 import { getDb, paths } from '../db.js';
 import { ingestFile } from '../pipeline/ingest.js';
 import { documentQueue } from '../pipeline/queue.js';
-import { determineArchivePdfPath, moveOrCopySync } from '../pipeline/ocr.js';
+import { determineArchivePdfPath, localDateString, moveOrCopySync } from '../pipeline/ocr.js';
 
 export const documentsRouter = Router();
 
@@ -558,9 +558,7 @@ documentsRouter.patch('/documents/:id', async (req: Request, res: Response) => {
       const dateStr =
         finalDocDate && /^\d{4}-\d{2}-\d{2}$/.test(finalDocDate.trim())
           ? finalDocDate.trim()
-          : existing.created_at
-          ? existing.created_at.slice(0, 10)
-          : new Date().toISOString().slice(0, 10);
+          : localDateString(existing.created_at);
 
       const titleToUse =
         (finalTitle && finalTitle.trim()) ||
