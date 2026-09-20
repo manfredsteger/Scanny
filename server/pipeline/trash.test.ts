@@ -153,6 +153,8 @@ describe('Zusammenfügen und Trennen', () => {
     expect(merged.ocr_text).toContain('----- Seite 2 -----');
     expect(merged.ocr_text).toContain('Zweiter Text');
     expect(fs.existsSync(merged.pdf_path)).toBe(true);
+    // Die Antwort muss merged_pages mitliefern – der Drawer blendet daran den Trennen-Knopf ein
+    expect(merged.merged_pages).toBe(2);
 
     // Quellen liegen im Papierkorb, ihre Reihenfolge ist festgehalten
     expect(getDoc(a).deleted_at).toBeTruthy();
@@ -164,6 +166,25 @@ describe('Zusammenfügen und Trennen', () => {
       { page_no: 1, source_document_id: a },
       { page_no: 2, source_document_id: b },
     ]);
+  });
+
+  it('ergänzt fehlende Metadaten aus den folgenden Seiten', async () => {
+    // Mehrseitige Rechnung: Datum steht auf Seite 1, der Betrag erst auf Seite 3
+    const seite1 = await createDocument({ title: 'Rechnung Stadtwerke', docDate: '2026-03-14' });
+    const seite2 = await createDocument({ title: 'Verbrauchsübersicht', docDate: '2026-03-20' });
+    const seite3 = await createDocument({ title: 'Zahlungsaufstellung', docDate: '2026-03-28' });
+    const db = getDb();
+    db.prepare('UPDATE documents SET doc_date = NULL, amount_cents = NULL WHERE id IN (?, ?)').run(seite2, seite1);
+    db.prepare('UPDATE documents SET amount_cents = 49050 WHERE id = ?').run(seite3);
+    db.prepare('UPDATE documents SET doc_date = ? WHERE id = ?').run('2026-03-14', seite1);
+
+    const merged = (await mergeDocuments([seite1, seite2, seite3])).body;
+
+    expect(merged.title).toBe('Rechnung Stadtwerke');
+    expect(merged.doc_date).toBe('2026-03-14');
+    expect(merged.amount_cents).toBe(49050);
+    // Der Dateiname richtet sich nach den zusammengeführten Werten
+    expect(path.basename(merged.pdf_path)).toBe('2026-03-14 Rechnung Stadtwerke.pdf');
   });
 
   it('lehnt das Zusammenfügen bei weniger als zwei Belegen ab', async () => {
@@ -184,9 +205,18 @@ describe('Zusammenfügen und Trennen', () => {
     expect(getDoc(a).deleted_at).toBeNull();
     expect(getDoc(b).deleted_at).toBeNull();
     expect(fs.existsSync(getDoc(a).pdf_path)).toBe(true);
-    // Das zusammengefügte Dokument ist verworfen
+    // Der Archiv-Name des ersten Belegs war vom zusammengefügten PDF belegt und muss
+    // nach dem Trennen ohne " (2)"-Zusatz zurückkommen
+    expect(path.basename(getDoc(a).pdf_path)).toBe('2026-05-04 Teil A.pdf');
+    expect(path.basename(getDoc(b).pdf_path)).toBe('2026-05-04 Teil B.pdf');
+    // Das zusammengefügte Dokument ist verworfen – seinen Archiv-Namen hat Beleg A zurück
     expect(getDoc(merged.id)).toBeUndefined();
-    expect(fs.existsSync(merged.pdf_path)).toBe(false);
+    expect(getDoc(a).pdf_path).toBe(merged.pdf_path);
+    expect(fs.readdirSync(path.join(paths.archiveDir, '_Eingang')).sort()).toEqual([
+      '2026-05-04 Teil A.pdf',
+      '2026-05-04 Teil B.pdf',
+    ]);
+    expect(fs.existsSync(trashDir()) ? fs.readdirSync(trashDir()) : []).toEqual([]);
   });
 
   it('lehnt das Trennen bei einem nicht zusammengefügten Beleg ab', async () => {

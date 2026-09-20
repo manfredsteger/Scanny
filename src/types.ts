@@ -176,6 +176,23 @@ export interface DocumentPageInfo {
 /** Nach so vielen Tagen im Papierkorb löscht Scanny endgültig (siehe server/pipeline/trash.ts). */
 export const TRASH_RETENTION_DAYS = 30;
 
+/**
+ * Hat der Beleg ein Bild-Original, das sich anzeigen und neu aufbereiten lässt?
+ * Nein bei PDF-Eingängen und bei zusammengefügten Belegen: die haben kein original_path,
+ * kein Scanbild und kein Arbeitsbild – nur das erzeugte PDF.
+ */
+export function hasEditableImage(
+  doc: Pick<ScannyDocument, 'original_path' | 'original_name'> | null | undefined
+): boolean {
+  if (!doc?.original_path) return false;
+  return !doc.original_name?.toLowerCase().endsWith('.pdf');
+}
+
+/** Quelle für die eingebettete PDF-Vorschau: Originaldatei, sonst das erzeugte Archiv-PDF. */
+export function pdfPreviewUrl(doc: Pick<ScannyDocument, 'id' | 'original_path'>): string {
+  return doc.original_path ? `/api/documents/${doc.id}/original` : `/api/documents/${doc.id}/pdf`;
+}
+
 /** Ergebnis der automatischen Erkennung (documents.extraction, JSON). Spans = [start, end] im ocr_text. */
 export interface DocumentExtraction {
   type: string;

@@ -2,7 +2,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { PDFDocument } from 'pdf-lib';
 import { getDb, paths } from '../db.js';
-import { archiveDirForFolder, determineArchivePdfPath, localDateString } from './ocr.js';
+import { archiveDirForFolder, determineArchivePdfPath, localDateString, syncArchivePdf } from './ocr.js';
 import { purgeDocument, restoreDocument, trashDocument } from './trash.js';
 
 export interface MergeResult {
@@ -13,6 +13,35 @@ export interface MergeResult {
 /** Trenner zwischen den OCR-Texten der einzelnen Quelldokumente. */
 function pageSeparator(pageNo: number): string {
   return `\n\n----- Seite ${pageNo} -----\n\n`;
+}
+
+/**
+ * Erster Beleg der Reihe, der für dieses Feld überhaupt einen Wert hat.
+ * Bei mehrseitigen Rechnungen steht der Betrag oft erst auf der letzten Seite und das Datum auf
+ * der ersten – deshalb wird je Feld gesucht statt stumpf Seite 1 zu übernehmen.
+ */
+function firstValue<T>(docs: SourceDoc[], field: string): T | null {
+  for (const doc of docs) {
+    const value = doc[field];
+    if (value !== null && value !== undefined && value !== '') return value as T;
+  }
+  return null;
+}
+
+/** Vereinigt die user_edited-Listen aller Quellen, damit geprüfte Werte geschützt bleiben. */
+function mergeUserEdited(docs: SourceDoc[]): string | null {
+  const fields = new Set<string>();
+  for (const doc of docs) {
+    const raw = doc.user_edited;
+    if (!raw) continue;
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) parsed.forEach((f) => fields.add(String(f)));
+    } catch {
+      raw.split(',').map((f: string) => f.trim()).filter(Boolean).forEach((f: string) => fields.add(f));
+    }
+  }
+  return fields.size > 0 ? JSON.stringify([...fields]) : null;
 }
 
 interface SourceDoc {
@@ -76,6 +105,22 @@ export async function mergeDocuments(ids: number[]): Promise<MergeResult> {
   const docs = loaded.docs!;
   const base = docs[0];
 
+  // Metadaten je Feld vom ersten Beleg, der dafür einen Wert hat (siehe firstValue).
+  // Ordner und Status hängen bewusst zusammen: sie kommen aus derselben Quelle.
+  const folderSource = docs.find((d) => d.folder_id !== null) || base;
+  const meta = {
+    folder_id: folderSource.folder_id as number | null,
+    status: folderSource.status as string,
+    title: firstValue<string>(docs, 'title') ?? base.title,
+    doc_date: firstValue<string>(docs, 'doc_date'),
+    amount_cents: firstValue<number>(docs, 'amount_cents'),
+    sender: firstValue<string>(docs, 'sender'),
+    doc_type: firstValue<string>(docs, 'doc_type'),
+    extraction: firstValue<string>(docs, 'extraction'),
+    file_date: firstValue<string>(docs, 'file_date'),
+    user_edited: mergeUserEdited(docs),
+  };
+
   // 1. PDFs im Speicher zusammenfügen
   let mergedBytes: Uint8Array;
   let mergedPageCount = 0;
@@ -125,14 +170,14 @@ export async function mergeDocuments(ids: number[]): Promise<MergeResult> {
   }
 
   // 4. Zusammengefügtes PDF ins Archiv schreiben (Ordner und Name wie beim ersten Beleg)
-  const targetDir = archiveDirForFolder(base.folder_id);
+  const targetDir = archiveDirForFolder(meta.folder_id);
   if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
   const dateStr =
-    base.doc_date && /^\d{4}-\d{2}-\d{2}$/.test(String(base.doc_date).trim())
-      ? String(base.doc_date).trim()
+    meta.doc_date && /^\d{4}-\d{2}-\d{2}$/.test(String(meta.doc_date).trim())
+      ? String(meta.doc_date).trim()
       : localDateString(base.created_at);
   const titleToUse =
-    (base.title && base.title.trim()) || (base.original_name ? path.parse(base.original_name).name : 'Beleg');
+    (meta.title && meta.title.trim()) || (base.original_name ? path.parse(base.original_name).name : 'Beleg');
   const targetPdf = determineArchivePdfPath(targetDir, dateStr, titleToUse, null);
 
   try {
@@ -163,23 +208,23 @@ export async function mergeDocuments(ids: number[]): Promise<MergeResult> {
           )
         `)
         .run(
-          base.status,
+          meta.status,
           base.source,
           base.import_batch,
-          base.folder_id,
-          base.title,
-          base.doc_date,
-          base.amount_cents,
-          base.sender,
-          base.doc_type,
-          base.user_edited,
+          meta.folder_id,
+          meta.title,
+          meta.doc_date,
+          meta.amount_cents,
+          meta.sender,
+          meta.doc_type,
+          meta.user_edited,
           base.original_name,
           targetPdf,
           mergedPageCount,
           base.color_mode || 'bw',
           mergedOcrText,
-          base.extraction,
-          base.file_date,
+          meta.extraction,
+          meta.file_date,
           base.created_at
         );
 
@@ -217,7 +262,8 @@ export async function mergeDocuments(ids: number[]): Promise<MergeResult> {
 
   const created = db
     .prepare(`
-      SELECT d.*, f.name as folder_name, f.kind as folder_kind, f.color as folder_color
+      SELECT d.*, f.name as folder_name, f.kind as folder_kind, f.color as folder_color,
+             (SELECT COUNT(*) FROM document_pages p WHERE p.document_id = d.id) as merged_pages
       FROM documents d LEFT JOIN folders f ON d.folder_id = f.id
       WHERE d.id = ?
     `)
@@ -279,6 +325,16 @@ export function splitDocument(id: number): MergeResult {
 
   // Erst wenn mindestens ein Beleg zurück ist, das zusammengefügte Dokument verwerfen
   purgeDocument(id);
+
+  // Dessen PDF belegte bis eben den Archiv-Namen, die Quellen sind deshalb auf " (2)" ausgewichen.
+  // Jetzt ist der Name wieder frei – Dateinamen an die DB-Werte angleichen.
+  for (const sourceId of restored) {
+    try {
+      syncArchivePdf(sourceId);
+    } catch (err) {
+      console.warn(`[Trennen] Dateiname von Dokument ${sourceId} konnte nicht angeglichen werden:`, err);
+    }
+  }
 
   const missing = pages.length - available.length;
   console.log(`[Trennen] Dokument ${id} aufgeteilt in ${restored.join(', ')}.`);

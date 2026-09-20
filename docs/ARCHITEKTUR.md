@@ -133,10 +133,16 @@ Entwickler müssen die folgenden 8 Regeln zwingend beachten:
   `src/components/MergeDialog.tsx` (Reihenfolge per Drag & Drop, zusätzlich Pfeiltasten für
   Tastatur und Touch; Standardreihenfolge = Erfassungszeit aufsteigend).
 - **`POST /api/documents/merge { ids }`** (`server/pipeline/merge.ts`): PDFs werden mit `pdf-lib`
-  in dieser Reihenfolge verbunden, OCR-Texte mit `----- Seite N -----` getrennt aneinandergehängt.
-  Titel, Datum, Betrag, Absender, Typ und **Ordner** kommen vom ERSTEN Beleg, das Vorschaubild
-  ebenfalls (Kopie). Das Ergebnis ist ein **neues** Dokument ohne `original_path` – es kann daher
-  nicht neu aufbereitet werden (`/reprocess`, `/detect` antworten mit 409).
+  in dieser Reihenfolge verbunden (die OCR-Textebene bleibt dabei erhalten), OCR-Texte mit
+  `----- Seite N -----` getrennt aneinandergehängt.
+- **Metadaten je Feld vom ersten Beleg, der dafür einen Wert hat** (`firstValue()`): Bei einer
+  mehrseitigen Rechnung steht das Datum auf Seite 1, der Betrag aber erst auf der letzten – stumpf
+  Seite 1 zu übernehmen würde den Betrag verlieren. Ordner und Status kommen zusammen aus derselben
+  Quelle, `user_edited` wird vereinigt, das Vorschaubild vom ersten Beleg kopiert.
+- Das Ergebnis ist ein **neues** Dokument ohne `original_path`: kein Original, kein Scanbild, kein
+  Arbeitsbild – nur das PDF. `/reprocess` und `/detect` antworten deshalb mit 409, und das Frontend
+  zeigt solche Belege über `hasEditableImage()` wie PDF-Eingänge an (PDF-Vorschau statt Bild, keine
+  Schnellaktionen, kein Zuschnitt-Editor).
 - **Reihenfolge der Schritte** (Regel 7): PDF im Speicher bauen → Quellen in den Papierkorb legen
   (erst dadurch wird der Dateiname im Archiv frei) → neues PDF schreiben → DB-Eintrag samt
   `document_pages` anlegen. Schlägt ein späterer Schritt fehl, werden die Quellen wiederhergestellt
@@ -148,7 +154,13 @@ Entwickler müssen die folgenden 8 Regeln zwingend beachten:
   aber nicht mehr trennen.
 - **`POST /api/documents/:id/split`**: holt die Quellen aus dem Papierkorb zurück und verwirft
   das zusammengefügte Dokument endgültig. Erst wenn mindestens eine Quelle zurück ist, wird
-  gelöscht.
+  gelöscht. Danach läuft `syncArchivePdf()` über die zurückgeholten Belege: Während des
+  Wiederherstellens belegte das zusammengefügte PDF noch den Archiv-Namen, die Quellen sind
+  deshalb auf `… (2).pdf` ausgewichen – jetzt ist der Name wieder frei.
+- **Warnung vor Datenverlust**: Wurde eine Quelle bereits endgültig gelöscht
+  (`source_document_id IS NULL`), geht diese Seite beim Trennen verloren, weil das zusammengefügte
+  Dokument dabei verworfen wird. Der Drawer lädt dafür `/pages`, zeigt einen Hinweis und fragt vor
+  dem Trennen nach.
 - **`POST /api/documents/:id/add-page { source_id }`** („Seite hinzufügen“ im Detail-Drawer)
   ist bewusst ein `merge([id, source_id])`: Nur so gibt es für **beide** Teile einen Eintrag in
   `document_pages` und „Seiten wieder trennen“ funktioniert auch hier. Das Dokument bekommt dadurch
@@ -172,4 +184,6 @@ Entwickler müssen die folgenden 8 Regeln zwingend beachten:
 - Der Ordnername `_Papierkorb` kollidiert nicht mit Benutzerordnern: `validateFolderName()`
   verbietet führende Unterstriche.
 - **Tests**: `server/pipeline/trash.test.ts` deckt Papierkorb-Lebenszyklus, 30-Tage-Aufräumen,
-  Zusammenfügen und Trennen gegen eine echte SQLite-DB mit echten PDFs ab.
+  Zusammenfügen und Trennen gegen eine echte SQLite-DB mit echten PDFs ab. Die Testumgebung setzt
+  `DATA_DIR`/`ARCHIVE_DIR` auf ein temporäres Verzeichnis, **bevor** `db.ts` dynamisch importiert
+  wird – die Pfade werden beim Laden des Moduls aufgelöst.

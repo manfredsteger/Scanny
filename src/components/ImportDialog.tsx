@@ -21,6 +21,8 @@ import {
   highlightSpan,
   parseExtraction,
   suggestFolderId,
+  hasEditableImage,
+  pdfPreviewUrl,
 } from '../types';
 import { DocumentForm } from './DocumentForm';
 import { OcrTextView } from './OcrTextView';
@@ -420,8 +422,9 @@ export function ImportDialog({
     }
   };
 
-  const isDocPdf = (doc?: ScannyDocument) =>
-    Boolean(doc?.original_name?.toLowerCase().endsWith('.pdf'));
+  // Zusammengefügte Belege haben kein Original/Scanbild – wie PDFs behandeln (nur PDF-Vorschau,
+  // keine Schnellaktionen; der Server lehnt /reprocess dafür mit 409 ab).
+  const isDocPdf = (doc?: ScannyDocument) => !hasEditableImage(doc);
 
   const isDocHeic = (doc?: ScannyDocument) => {
     const name = (doc?.original_name || '').toLowerCase();
@@ -655,7 +658,7 @@ export function ImportDialog({
                     )
                   ) : isDocPdf(currentDoc) ? (
                     <iframe
-                      src={`/api/documents/${currentDoc.id}/original`}
+                      src={pdfPreviewUrl(currentDoc)}
                       title="PDF Vorschau"
                       className="w-full h-full rounded-xl border border-zinc-300 dark:border-zinc-800 bg-white"
                     />

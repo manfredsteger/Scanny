@@ -166,7 +166,7 @@ export function MergeDialog({ isOpen, documents, onClose, onMerged }: MergeDialo
                   </p>
                   {index === 0 && (
                     <p className="text-[11px] text-blue-600 dark:text-blue-400 font-medium mt-0.5">
-                      Titel, Datum und Ordner werden von diesem Beleg übernommen
+                      Titel und Ablageort richten sich nach diesem Beleg
                     </p>
                   )}
                 </div>
@@ -206,7 +206,8 @@ export function MergeDialog({ isOpen, documents, onClose, onMerged }: MergeDialo
         {/* Fuß */}
         <div className="px-5 py-4 border-t border-zinc-200 dark:border-zinc-800 bg-zinc-50/80 dark:bg-zinc-800/50 flex items-center justify-between gap-3">
           <p className="text-[11px] text-zinc-500 dark:text-zinc-400 leading-snug">
-            Die Einzelbelege wandern in den Papierkorb und lassen sich über »Seiten wieder trennen«
+            Fehlende Angaben wie Datum oder Betrag werden von den folgenden Seiten ergänzt. Die
+            Einzelbelege wandern in den Papierkorb und lassen sich über »Seiten wieder trennen«
             zurückholen.
           </p>
           <div className="flex items-center gap-2 shrink-0">

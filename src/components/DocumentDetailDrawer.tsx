@@ -24,7 +24,10 @@ import {
   Folder,
   ScannyDocument,
   DocumentFormData,
+  DocumentPageInfo,
   HighlightField,
+  hasEditableImage,
+  pdfPreviewUrl,
   TRASH_RETENTION_DAYS,
   highlightSpan,
   parseExtraction,
@@ -74,6 +77,8 @@ export function DocumentDetailDrawer({
   const [addPageId, setAddPageId] = useState<string>('');
   const [pageMessage, setPageMessage] = useState<string | null>(null);
   const [pageError, setPageError] = useState<string | null>(null);
+  const [pages, setPages] = useState<DocumentPageInfo[]>([]);
+  const [isSplitWarningOpen, setIsSplitWarningOpen] = useState(false);
 
   const handleCopyOcrText = async () => {
     if (!localDoc?.ocr_text) return;
@@ -89,8 +94,8 @@ export function DocumentDetailDrawer({
   useEffect(() => {
     setLocalDoc(document);
     if (document) {
-      const isPdf = Boolean(document.original_name?.toLowerCase().endsWith('.pdf'));
-      setActiveTab((prev) => (isPdf ? 'pdf' : prev === 'pdf' ? 'preview' : prev));
+      const nurPdf = !hasEditableImage(document);
+      setActiveTab((prev) => (nurPdf ? 'pdf' : prev === 'pdf' ? 'preview' : prev));
       let userEditedArr: string[] = [];
       if (document.user_edited) {
         try {
@@ -125,7 +130,31 @@ export function DocumentDetailDrawer({
     setPageMessage(null);
     setPageError(null);
     setPageAction('idle');
+    setPages([]);
+    setIsSplitWarningOpen(false);
   }, [document?.id]);
+
+  // Herkunft der Seiten laden, sobald das Dokument zusammengefügt ist. Fehlt eine Quelle
+  // (endgültig gelöscht), muss vor dem Trennen gewarnt werden – diese Seite geht dabei verloren.
+  useEffect(() => {
+    const id = localDoc?.id;
+    if (!id || !localDoc?.merged_pages) {
+      setPages([]);
+      return;
+    }
+    let abgebrochen = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/documents/${id}/pages`);
+        if (res.ok && !abgebrochen) setPages(await res.json());
+      } catch (err) {
+        console.error('Seiten konnten nicht geladen werden:', err);
+      }
+    })();
+    return () => {
+      abgebrochen = true;
+    };
+  }, [localDoc?.id, localDoc?.merged_pages]);
 
   // Polling wenn das Dokument neu aufbereitet wird
   useEffect(() => {
@@ -274,6 +303,7 @@ export function DocumentDetailDrawer({
   // Zusammengefügtes Dokument wieder in Einzelbelege trennen
   const handleSplit = async () => {
     if (!localDoc) return;
+    setIsSplitWarningOpen(false);
     setPageAction('splitting');
     setPageError(null);
     setPageMessage(null);
@@ -322,10 +352,14 @@ export function DocumentDetailDrawer({
 
   const isTrashed = Boolean(localDoc.deleted_at);
   const mergedPages = localDoc.merged_pages || 0;
+  // Seiten, deren Quellbeleg endgültig gelöscht wurde – sie gehen beim Trennen verloren
+  const lostPages = pages.filter((p) => p.source_document_id === null).length;
   const isBusyWithPages = pageAction !== 'idle';
   const addableDocuments = inboxDocuments.filter((d) => d.id !== localDoc.id && !d.deleted_at);
 
   const isPdf = Boolean(localDoc.original_name.toLowerCase().endsWith('.pdf'));
+  // Zusammengefügte Belege haben kein Original und kein Scanbild – sie werden wie PDFs angezeigt
+  const hasImage = hasEditableImage(localDoc);
   const isHeic = () => {
     const name = localDoc.original_name.toLowerCase();
     return name.endsWith('.heic') || name.endsWith('.heif');
@@ -536,7 +570,7 @@ export function DocumentDetailDrawer({
                 <div className="space-y-2.5">
                   <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-100/70 dark:bg-zinc-950 p-2 flex items-center justify-center relative min-h-[220px] max-h-[320px] overflow-hidden">
                     {/* Umschalter Aufbereitet | Original oben rechts (nur bei Nicht-PDF) */}
-                    {!isPdf && (
+                    {hasImage && (
                       <div
                         id="drawer-preview-mode-toggle"
                         className="absolute top-3 right-3 z-20 flex items-center bg-white/95 dark:bg-zinc-900/95 backdrop-blur-xs p-0.5 rounded-xl border border-zinc-200/90 dark:border-zinc-800 shadow-sm text-xs font-medium"
@@ -566,9 +600,9 @@ export function DocumentDetailDrawer({
                       </div>
                     )}
 
-                    {isPdf ? (
+                    {!hasImage ? (
                       <iframe
-                        src={`/api/documents/${localDoc.id}/pdf`}
+                        src={pdfPreviewUrl(localDoc)}
                         title="PDF Vorschau"
                         className="w-full h-64 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white"
                       />
@@ -601,7 +635,7 @@ export function DocumentDetailDrawer({
                   </div>
 
                   {/* Schnellaktionen unter der Vorschau (Drehung + Farbmodus) */}
-                  {!isPdf && (
+                  {hasImage && (
                     <div className="flex flex-wrap items-center justify-between gap-2 px-1">
                       {/* Drehung + Zuschnitt */}
                       <div className="flex items-center gap-1.5">
@@ -798,14 +832,21 @@ export function DocumentDetailDrawer({
                       <Layers className="w-4 h-4 shrink-0 text-blue-600 dark:text-blue-400" />
                       <span className="leading-snug">
                         Aus <span className="font-semibold">{mergedPages} Belegen</span> zusammengefügt.
-                        Die Einzelbelege liegen im Papierkorb.
+                        {lostPages > 0 ? (
+                          <span className="block text-amber-700 dark:text-amber-400 font-medium mt-0.5">
+                            {lostPages} {lostPages === 1 ? 'Seite ist' : 'Seiten sind'} endgültig gelöscht und
+                            {lostPages === 1 ? ' geht' : ' gehen'} beim Trennen verloren.
+                          </span>
+                        ) : (
+                          ' Die Einzelbelege liegen im Papierkorb.'
+                        )}
                       </span>
                     </div>
                     <button
                       type="button"
                       id="drawer-split-btn"
                       disabled={isBusyWithPages}
-                      onClick={handleSplit}
+                      onClick={() => (lostPages > 0 ? setIsSplitWarningOpen(true) : handleSplit())}
                       className="shrink-0 px-3 py-1.5 rounded-xl text-xs font-semibold border border-zinc-300 dark:border-zinc-700 text-zinc-700 dark:text-zinc-200 hover:bg-white dark:hover:bg-zinc-900 transition-colors cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
                       title="Die ursprünglichen Belege wiederherstellen und dieses Dokument verwerfen"
                     >
@@ -931,6 +972,16 @@ export function DocumentDetailDrawer({
         isDeleting={isDeleting}
         onConfirm={handleConfirmDelete}
         onCancel={() => setIsDeleteModalOpen(false)}
+      />
+
+      <DeleteConfirmModal
+        isOpen={isSplitWarningOpen}
+        title="Seiten trennen?"
+        message={`Von diesem Dokument ${lostPages === 1 ? 'wurde 1 Seite' : `wurden ${lostPages} Seiten`} bereits endgültig gelöscht. Beim Trennen ${lostPages === 1 ? 'geht diese Seite' : 'gehen diese Seiten'} unwiderruflich verloren, weil das zusammengefügte Dokument dabei verworfen wird.`}
+        confirmText="Trotzdem trennen"
+        isDeleting={pageAction === 'splitting'}
+        onConfirm={handleSplit}
+        onCancel={() => setIsSplitWarningOpen(false)}
       />
 
       <DeleteConfirmModal
