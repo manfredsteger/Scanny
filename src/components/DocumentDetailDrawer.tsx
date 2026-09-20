@@ -15,8 +15,20 @@ import {
   Copy,
   Check,
   Crop,
+  Layers,
+  Scissors,
+  Plus,
+  Undo2,
 } from 'lucide-react';
-import { Folder, ScannyDocument, DocumentFormData, HighlightField, highlightSpan, parseExtraction } from '../types';
+import {
+  Folder,
+  ScannyDocument,
+  DocumentFormData,
+  HighlightField,
+  TRASH_RETENTION_DAYS,
+  highlightSpan,
+  parseExtraction,
+} from '../types';
 import { DocumentForm } from './DocumentForm';
 import { OcrTextView } from './OcrTextView';
 import { CornerEditor } from './CornerEditor';
@@ -25,17 +37,26 @@ import { DeleteConfirmModal } from './DeleteConfirmModal';
 interface DocumentDetailDrawerProps {
   document: ScannyDocument | null;
   folders: Folder[];
+  /** Fertig aufbereitete Belege im Eingang – Auswahl für "Seite hinzufügen". */
+  inboxDocuments?: ScannyDocument[];
   onClose: () => void;
   onRefresh: () => void;
+  onOpenDocument?: (id: number) => void;
   onDeleteDocument: (id: number) => Promise<void>;
+  onRestoreDocument?: (id: number) => Promise<void>;
+  onPurgeDocument?: (id: number) => Promise<void>;
 }
 
 export function DocumentDetailDrawer({
   document,
   folders,
+  inboxDocuments = [],
   onClose,
   onRefresh,
+  onOpenDocument,
   onDeleteDocument,
+  onRestoreDocument,
+  onPurgeDocument,
 }: DocumentDetailDrawerProps) {
   const [localDoc, setLocalDoc] = useState<ScannyDocument | null>(document);
   const [formData, setFormData] = useState<DocumentFormData | null>(null);
@@ -48,6 +69,11 @@ export function DocumentDetailDrawer({
   const [copied, setCopied] = useState(false);
   const [hoveredField, setHoveredField] = useState<HighlightField>(null);
   const [isCornerEditorOpen, setIsCornerEditorOpen] = useState(false);
+  const [isPurgeModalOpen, setIsPurgeModalOpen] = useState(false);
+  const [pageAction, setPageAction] = useState<'idle' | 'adding' | 'splitting' | 'restoring'>('idle');
+  const [addPageId, setAddPageId] = useState<string>('');
+  const [pageMessage, setPageMessage] = useState<string | null>(null);
+  const [pageError, setPageError] = useState<string | null>(null);
 
   const handleCopyOcrText = async () => {
     if (!localDoc?.ocr_text) return;
@@ -95,6 +121,10 @@ export function DocumentDetailDrawer({
       setFormData(null);
     }
     setSavedSuccess(false);
+    setAddPageId('');
+    setPageMessage(null);
+    setPageError(null);
+    setPageAction('idle');
   }, [document?.id]);
 
   // Polling wenn das Dokument neu aufbereitet wird
@@ -215,7 +245,85 @@ export function DocumentDetailDrawer({
     }
   };
 
+  // Eine Seite anhängen: erzeugt serverseitig ein NEUES zusammengefügtes Dokument,
+  // das Titel, Datum und Ordner dieses Belegs übernimmt – der Drawer springt darauf um.
+  const handleAddPage = async () => {
+    if (!localDoc || !addPageId) return;
+    setPageAction('adding');
+    setPageError(null);
+    setPageMessage(null);
+    try {
+      const res = await fetch(`/api/documents/${localDoc.id}/add-page`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source_id: parseInt(addPageId, 10) }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data?.error || 'Seite konnte nicht angehängt werden.');
+      setAddPageId('');
+      onRefresh();
+      if (data?.id && onOpenDocument) onOpenDocument(data.id);
+      else if (data) setLocalDoc(data);
+    } catch (err: any) {
+      setPageError(err?.message || 'Seite konnte nicht angehängt werden.');
+    } finally {
+      setPageAction('idle');
+    }
+  };
+
+  // Zusammengefügtes Dokument wieder in Einzelbelege trennen
+  const handleSplit = async () => {
+    if (!localDoc) return;
+    setPageAction('splitting');
+    setPageError(null);
+    setPageMessage(null);
+    try {
+      const res = await fetch(`/api/documents/${localDoc.id}/split`, { method: 'POST' });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data?.error || 'Dokument konnte nicht getrennt werden.');
+      onRefresh();
+      onClose();
+    } catch (err: any) {
+      setPageError(err?.message || 'Dokument konnte nicht getrennt werden.');
+    } finally {
+      setPageAction('idle');
+    }
+  };
+
+  const handleRestore = async () => {
+    if (!localDoc || !onRestoreDocument) return;
+    setPageAction('restoring');
+    setPageError(null);
+    try {
+      await onRestoreDocument(localDoc.id);
+      onClose();
+    } catch (err: any) {
+      setPageError(err?.message || 'Wiederherstellen fehlgeschlagen.');
+    } finally {
+      setPageAction('idle');
+    }
+  };
+
+  const handleConfirmPurge = async () => {
+    if (!localDoc || !onPurgeDocument) return;
+    setIsDeleting(true);
+    try {
+      await onPurgeDocument(localDoc.id);
+      setIsPurgeModalOpen(false);
+      onClose();
+    } catch (err: any) {
+      setPageError(err?.message || 'Endgültiges Löschen fehlgeschlagen.');
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
   if (!document || !localDoc) return null;
+
+  const isTrashed = Boolean(localDoc.deleted_at);
+  const mergedPages = localDoc.merged_pages || 0;
+  const isBusyWithPages = pageAction !== 'idle';
+  const addableDocuments = inboxDocuments.filter((d) => d.id !== localDoc.id && !d.deleted_at);
 
   const isPdf = Boolean(localDoc.original_name.toLowerCase().endsWith('.pdf'));
   const isHeic = () => {
@@ -269,15 +377,44 @@ export function DocumentDetailDrawer({
             </div>
 
             <div className="flex items-center gap-1">
-              <button
-                type="button"
-                id="drawer-delete-btn"
-                onClick={() => setIsDeleteModalOpen(true)}
-                className="p-2 rounded-xl text-zinc-400 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 transition-colors cursor-pointer"
-                title="Dokument löschen"
-              >
-                <Trash2 className="w-4 h-4" />
-              </button>
+              {isTrashed ? (
+                <>
+                  <button
+                    type="button"
+                    id="drawer-restore-btn"
+                    disabled={isBusyWithPages}
+                    onClick={handleRestore}
+                    className="px-3 py-1.5 rounded-xl text-xs font-semibold border border-zinc-300 dark:border-zinc-700 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
+                    title="Beleg aus dem Papierkorb zurückholen"
+                  >
+                    {pageAction === 'restoring' ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Undo2 className="w-3.5 h-3.5" />
+                    )}
+                    Wiederherstellen
+                  </button>
+                  <button
+                    type="button"
+                    id="drawer-purge-btn"
+                    onClick={() => setIsPurgeModalOpen(true)}
+                    className="p-2 rounded-xl text-zinc-400 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 transition-colors cursor-pointer"
+                    title="Endgültig löschen"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  id="drawer-delete-btn"
+                  onClick={() => setIsDeleteModalOpen(true)}
+                  className="p-2 rounded-xl text-zinc-400 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 transition-colors cursor-pointer"
+                  title="In den Papierkorb legen"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              )}
               <button
                 type="button"
                 id="drawer-close-btn"
@@ -292,6 +429,23 @@ export function DocumentDetailDrawer({
 
           {/* Inhalt: Vorschau + Formular */}
           <div className="flex-1 overflow-y-auto p-5 space-y-5">
+            {/* Hinweis: Beleg liegt im Papierkorb */}
+            {isTrashed && (
+              <div
+                id="drawer-trash-notice"
+                className="p-3 bg-zinc-100 dark:bg-zinc-800/70 border border-zinc-200 dark:border-zinc-700 rounded-xl text-xs text-zinc-700 dark:text-zinc-300 flex items-start gap-2.5"
+              >
+                <Trash2 className="w-4 h-4 shrink-0 mt-0.5 text-zinc-500" />
+                <div className="leading-snug">
+                  <p className="font-semibold">Dieser Beleg liegt im Papierkorb</p>
+                  <p className="mt-0.5 opacity-80">
+                    Bearbeiten ist erst nach dem Wiederherstellen möglich. Nach {TRASH_RETENTION_DAYS} Tagen
+                    wird er automatisch endgültig gelöscht.
+                  </p>
+                </div>
+              </div>
+            )}
+
             {/* Duplikat-Hinweis */}
             {localDoc.duplicate_of_id && (
               <div className="p-3 bg-amber-50 dark:bg-amber-950/50 border border-amber-200 dark:border-amber-800/80 rounded-xl text-xs text-amber-800 dark:text-amber-200 flex items-start gap-2.5">
@@ -631,6 +785,88 @@ export function DocumentDetailDrawer({
               )}
             </div>
 
+            {/* Seiten: zusammengefügte Belege trennen, weitere Seite anhängen */}
+            {!isTrashed && (
+              <div id="drawer-pages-section" className="space-y-2.5">
+                <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
+                  Seiten
+                </h3>
+
+                {mergedPages > 0 && (
+                  <div className="flex items-center justify-between gap-3 p-3 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50/70 dark:bg-zinc-800/40">
+                    <div className="flex items-center gap-2.5 min-w-0 text-xs text-zinc-700 dark:text-zinc-300">
+                      <Layers className="w-4 h-4 shrink-0 text-blue-600 dark:text-blue-400" />
+                      <span className="leading-snug">
+                        Aus <span className="font-semibold">{mergedPages} Belegen</span> zusammengefügt.
+                        Die Einzelbelege liegen im Papierkorb.
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      id="drawer-split-btn"
+                      disabled={isBusyWithPages}
+                      onClick={handleSplit}
+                      className="shrink-0 px-3 py-1.5 rounded-xl text-xs font-semibold border border-zinc-300 dark:border-zinc-700 text-zinc-700 dark:text-zinc-200 hover:bg-white dark:hover:bg-zinc-900 transition-colors cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
+                      title="Die ursprünglichen Belege wiederherstellen und dieses Dokument verwerfen"
+                    >
+                      {pageAction === 'splitting' ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <Scissors className="w-3.5 h-3.5" />
+                      )}
+                      Seiten wieder trennen
+                    </button>
+                  </div>
+                )}
+
+                <div className="flex items-center gap-2">
+                  <select
+                    id="drawer-add-page-select"
+                    value={addPageId}
+                    onChange={(e) => setAddPageId(e.target.value)}
+                    disabled={isBusyWithPages || addableDocuments.length === 0}
+                    className="flex-1 min-w-0 px-3 py-2 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 text-xs text-zinc-800 dark:text-zinc-200 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <option value="">
+                      {addableDocuments.length === 0
+                        ? 'Kein Beleg im Eingang zum Anhängen'
+                        : 'Seite aus dem Eingang anhängen…'}
+                    </option>
+                    {addableDocuments.map((d) => (
+                      <option key={d.id} value={d.id}>
+                        {d.title || d.original_name}
+                        {d.page_count > 1 ? ` (${d.page_count} Seiten)` : ''}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    id="drawer-add-page-btn"
+                    disabled={!addPageId || isBusyWithPages}
+                    onClick={handleAddPage}
+                    className="shrink-0 px-3 py-2 rounded-xl text-xs font-semibold bg-blue-600 hover:bg-blue-700 text-white transition-colors cursor-pointer flex items-center gap-1.5 shadow-xs disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    {pageAction === 'adding' ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Plus className="w-3.5 h-3.5" />
+                    )}
+                    Seite hinzufügen
+                  </button>
+                </div>
+
+                {pageError && (
+                  <p className="text-[11px] text-red-600 dark:text-red-400 flex items-start gap-1.5">
+                    <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                    <span>{pageError}</span>
+                  </p>
+                )}
+                {pageMessage && (
+                  <p className="text-[11px] text-emerald-600 dark:text-emerald-400">{pageMessage}</p>
+                )}
+              </div>
+            )}
+
             {/* Metadaten Formular */}
             <div>
               <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-400 dark:text-zinc-500 mb-3">
@@ -671,7 +907,8 @@ export function DocumentDetailDrawer({
                 type="button"
                 id="drawer-save-btn"
                 onClick={handleSave}
-                disabled={isSaving || !formData}
+                disabled={isSaving || !formData || isTrashed}
+                title={isTrashed ? 'Beleg liegt im Papierkorb – erst wiederherstellen' : undefined}
                 className="px-4 py-2 text-xs font-semibold rounded-xl bg-blue-600 hover:bg-blue-700 text-white transition-colors cursor-pointer flex items-center gap-1.5 shadow-xs disabled:opacity-50"
               >
                 {isSaving ? (
@@ -688,12 +925,22 @@ export function DocumentDetailDrawer({
 
       <DeleteConfirmModal
         isOpen={isDeleteModalOpen}
-        title="Dokument löschen"
-        message={`Möchtest du das Dokument »${document.title || document.original_name}« wirklich unwiderruflich löschen? Auch die Originaldatei wird gelöscht.`}
-        confirmText="Unwiderruflich löschen"
+        title="In den Papierkorb legen"
+        message={`»${document.title || document.original_name}« wandert in den Papierkorb und wird nach ${TRASH_RETENTION_DAYS} Tagen endgültig gelöscht. Bis dahin lässt sich der Beleg jederzeit wiederherstellen.`}
+        confirmText="In den Papierkorb"
         isDeleting={isDeleting}
         onConfirm={handleConfirmDelete}
         onCancel={() => setIsDeleteModalOpen(false)}
+      />
+
+      <DeleteConfirmModal
+        isOpen={isPurgeModalOpen}
+        title="Endgültig löschen"
+        message={`»${document.title || document.original_name}« wird unwiderruflich gelöscht – samt Originaldatei, PDF und Vorschau. Das lässt sich nicht rückgängig machen.`}
+        confirmText="Unwiderruflich löschen"
+        isDeleting={isDeleting}
+        onConfirm={handleConfirmPurge}
+        onCancel={() => setIsPurgeModalOpen(false)}
       />
     </>
   );

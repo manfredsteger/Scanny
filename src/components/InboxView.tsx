@@ -15,6 +15,7 @@ import {
   Plus,
   Check,
   FolderInput,
+  Layers,
   X,
 } from 'lucide-react';
 import { Folder, ScannyDocument, SystemPaths, formatDocumentType, suggestFolderId } from '../types';
@@ -28,6 +29,7 @@ interface InboxViewProps {
   onSelectDocument: (doc: ScannyDocument) => void;
   onUploadFiles: (files: FileList | File[]) => Promise<void>;
   onRetryDocument: (id: number) => Promise<void>;
+  onMergeDocuments: (docs: ScannyDocument[]) => void;
   isUploading?: boolean;
 }
 
@@ -40,6 +42,7 @@ export function InboxView({
   onSelectDocument,
   onUploadFiles,
   onRetryDocument,
+  onMergeDocuments,
   isUploading = false,
 }: InboxViewProps) {
   const [isDropActive, setIsDropActive] = useState(false);
@@ -295,6 +298,21 @@ export function InboxView({
               >
                 {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FolderInput className="w-3.5 h-3.5" />}
                 Verschieben
+              </button>
+              <button
+                type="button"
+                id="inbox-bulk-merge-btn"
+                disabled={selectedList.length < 2 || busy}
+                onClick={() => onMergeDocuments(selectedList)}
+                className="px-3 py-1.5 rounded-lg border border-blue-300 dark:border-blue-800 bg-white dark:bg-zinc-900 text-blue-700 dark:text-blue-300 font-semibold flex items-center gap-1.5 hover:bg-blue-100 dark:hover:bg-blue-900/50 transition-colors disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed"
+                title={
+                  selectedList.length < 2
+                    ? 'Mindestens zwei Belege auswählen'
+                    : 'Die gewählten Belege zu einem Dokument zusammenfügen'
+                }
+              >
+                <Layers className="w-3.5 h-3.5" />
+                Zu einem Dokument zusammenfügen
               </button>
               <button
                 type="button"

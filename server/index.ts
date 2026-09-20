@@ -7,6 +7,7 @@ import { settingsRouter } from './routes/settings.js';
 import { documentsRouter } from './routes/documents.js';
 import { initQueue } from './pipeline/queue.js';
 import { startWatcher } from './pipeline/watcher.js';
+import { startTrashCleanup } from './pipeline/trash.js';
 import { SCAN_PY_PATH } from './pipeline/processDocument.js';
 import fs from 'node:fs';
 
@@ -22,6 +23,7 @@ async function startServer() {
   // Warteschlange und Ordner-Überwachung initialisieren
   initQueue();
   startWatcher();
+  startTrashCleanup();
 
   // JSON Body Parser für API-Anfragen
   app.use(express.json());

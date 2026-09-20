@@ -8,6 +8,8 @@ import { ingestFile } from '../pipeline/ingest.js';
 import { documentQueue } from '../pipeline/queue.js';
 import { ensureWorkImage, runScanPy } from '../pipeline/processDocument.js';
 import { moveOrCopySync, planArchivePdf } from '../pipeline/ocr.js';
+import { mergeDocuments, splitDocument } from '../pipeline/merge.js';
+import { purgeDocument, restoreDocument, TRASH_RETENTION_DAYS, trashDocument } from '../pipeline/trash.js';
 import { buildFtsQuery, SNIPPET_END, SNIPPET_START } from '../search.js';
 
 export const documentsRouter = Router();
@@ -136,6 +138,7 @@ documentsRouter.get('/stats', (req: Request, res: Response) => {
       .prepare(`
         SELECT status, COUNT(*) as count
         FROM documents
+        WHERE deleted_at IS NULL
         GROUP BY status
       `)
       .all() as { status: string; count: number }[];
@@ -146,6 +149,7 @@ documentsRouter.get('/stats', (req: Request, res: Response) => {
       processing: 0,
       error: 0,
       filed: 0,
+      trash: 0,
     };
 
     for (const row of rows) {
@@ -153,6 +157,11 @@ documentsRouter.get('/stats', (req: Request, res: Response) => {
         (stats as any)[row.status] = row.count;
       }
     }
+
+    const trashRow = db
+      .prepare('SELECT COUNT(*) as count FROM documents WHERE deleted_at IS NOT NULL')
+      .get() as { count: number };
+    stats.trash = trashRow?.count || 0;
 
     res.json(stats);
   } catch (error: any) {
@@ -169,6 +178,10 @@ documentsRouter.get('/documents', (req: Request, res: Response) => {
 
     const conditions: string[] = [];
     const params: any[] = [];
+
+    // Standard: nur nicht gelöschte Belege. ?deleted=1 zeigt ausschließlich den Papierkorb.
+    const wantsTrash = req.query.deleted === '1' || req.query.deleted === 'true';
+    conditions.push(wantsTrash ? 'd.deleted_at IS NOT NULL' : 'd.deleted_at IS NULL');
 
     if (q && typeof q === 'string' && q.trim()) {
       const cleanQ = q.trim();
@@ -223,21 +236,22 @@ documentsRouter.get('/documents', (req: Request, res: Response) => {
         (
           SELECT dup.id
           FROM documents dup
-          WHERE dup.sha256 = d.sha256 AND dup.id < d.id AND d.sha256 IS NOT NULL
+          WHERE dup.sha256 = d.sha256 AND dup.id < d.id AND d.sha256 IS NOT NULL AND dup.deleted_at IS NULL
           ORDER BY dup.id ASC
           LIMIT 1
         ) as duplicate_of_id,
         (
           SELECT COALESCE(dup.title, dup.original_name)
           FROM documents dup
-          WHERE dup.sha256 = d.sha256 AND dup.id < d.id AND d.sha256 IS NOT NULL
+          WHERE dup.sha256 = d.sha256 AND dup.id < d.id AND d.sha256 IS NOT NULL AND dup.deleted_at IS NULL
           ORDER BY dup.id ASC
           LIMIT 1
-        ) as duplicate_of_title
+        ) as duplicate_of_title,
+        (SELECT COUNT(*) FROM document_pages p WHERE p.document_id = d.id) as merged_pages
       FROM documents d
       LEFT JOIN folders f ON d.folder_id = f.id
       ${whereClause}
-      ORDER BY d.id DESC
+      ORDER BY ${wantsTrash ? 'd.deleted_at DESC, d.id DESC' : 'd.id DESC'}
     `;
 
     const documents = db.prepare(sql).all(...params);
@@ -267,17 +281,18 @@ documentsRouter.get('/documents/:id', (req: Request, res: Response) => {
           (
             SELECT dup.id
             FROM documents dup
-            WHERE dup.sha256 = d.sha256 AND dup.id < d.id AND d.sha256 IS NOT NULL
+            WHERE dup.sha256 = d.sha256 AND dup.id < d.id AND d.sha256 IS NOT NULL AND dup.deleted_at IS NULL
             ORDER BY dup.id ASC
             LIMIT 1
           ) as duplicate_of_id,
           (
             SELECT COALESCE(dup.title, dup.original_name)
             FROM documents dup
-            WHERE dup.sha256 = d.sha256 AND dup.id < d.id AND d.sha256 IS NOT NULL
+            WHERE dup.sha256 = d.sha256 AND dup.id < d.id AND d.sha256 IS NOT NULL AND dup.deleted_at IS NULL
             ORDER BY dup.id ASC
             LIMIT 1
-          ) as duplicate_of_title
+          ) as duplicate_of_title,
+          (SELECT COUNT(*) FROM document_pages p WHERE p.document_id = d.id) as merged_pages
         FROM documents d
         LEFT JOIN folders f ON d.folder_id = f.id
         WHERE d.id = ?
@@ -385,7 +400,7 @@ documentsRouter.get('/search', (req: Request, res: Response) => {
     const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
     if (!q) return res.json([]);
 
-    const conditions = ['documents_fts MATCH ?'];
+    const conditions = ['documents_fts MATCH ?', 'd.deleted_at IS NULL'];
     const params: any[] = [buildFtsQuery(q)];
 
     const folderId = typeof req.query.folder_id === 'string' ? req.query.folder_id : '';
@@ -573,6 +588,11 @@ documentsRouter.post('/documents/:id/reprocess', (req: Request, res: Response) =
 
   const doc = getDb().prepare('SELECT original_path FROM documents WHERE id = ?').get(id) as any;
   if (!doc) return res.status(404).json({ error: 'Dokument nicht gefunden.' });
+  if (!doc.original_path) {
+    return res
+      .status(409)
+      .json({ error: 'Für dieses Dokument gibt es kein Original (z. B. zusammengefügte Belege).' });
+  }
   if ((doc.original_path || '').toLowerCase().endsWith('.pdf')) {
     return res.status(409).json({ error: 'PDF-Dokumente können nicht neu aufbereitet werden.' });
   }
@@ -654,6 +674,12 @@ export function patchDocument(id: number, input: any): PatchResult {
     const existing = db.prepare('SELECT * FROM documents WHERE id = ?').get(id) as any;
     if (!existing) {
       return { code: 404, body: { error: 'Dokument nicht gefunden.' } };
+    }
+    if (existing.deleted_at) {
+      return {
+        code: 409,
+        body: { error: 'Dokument liegt im Papierkorb. Bitte zuerst wiederherstellen.' },
+      };
     }
 
     const {
@@ -811,7 +837,8 @@ export function patchDocument(id: number, input: any): PatchResult {
           d.*,
           f.name as folder_name,
           f.kind as folder_kind,
-          f.color as folder_color
+          f.color as folder_color,
+          (SELECT COUNT(*) FROM document_pages p WHERE p.document_id = d.id) as merged_pages
         FROM documents d
         LEFT JOIN folders f ON d.folder_id = f.id
         WHERE d.id = ?
@@ -934,7 +961,106 @@ documentsRouter.post('/documents/:id/retry', (req: Request, res: Response) => {
   }
 });
 
-// DELETE /api/documents/:id -> Hart löschen inkl. Dateien
+// POST /api/documents/merge { ids: number[] } -> Belege zu einem Dokument zusammenfügen
+documentsRouter.post('/documents/merge', async (req: Request, res: Response) => {
+  try {
+    const ids = Array.isArray(req.body?.ids)
+      ? req.body.ids.map((v: any) => parseInt(v, 10)).filter((v: number) => !isNaN(v))
+      : [];
+    const result = await mergeDocuments(ids);
+    res.status(result.code).json(result.body);
+  } catch (error: any) {
+    console.error('Fehler beim Zusammenfügen:', error);
+    res.status(500).json({ error: error?.message || 'Belege konnten nicht zusammengefügt werden.' });
+  }
+});
+
+// POST /api/documents/:id/add-page { source_id } -> einen Beleg aus dem Eingang anhängen.
+// Läuft über dasselbe Zusammenfügen: das Ergebnis ist ein NEUES Dokument mit den Metadaten und dem
+// Ablageort des Ziels, damit "Seiten wieder trennen" auch hier beide Belege zurückholen kann.
+documentsRouter.post('/documents/:id/add-page', async (req: Request, res: Response) => {
+  try {
+    const id = parseId(req.params.id);
+    if (id === null) return res.status(400).json({ error: 'Ungültige Dokument-ID.' });
+
+    const sourceId = parseInt(req.body?.source_id, 10);
+    if (isNaN(sourceId)) return res.status(400).json({ error: 'Bitte einen Beleg zum Anhängen angeben (source_id).' });
+    if (sourceId === id) return res.status(400).json({ error: 'Ein Beleg kann nicht an sich selbst angehängt werden.' });
+
+    const result = await mergeDocuments([id, sourceId]);
+    res.status(result.code).json(result.body);
+  } catch (error: any) {
+    console.error('Fehler beim Anhängen einer Seite:', error);
+    res.status(500).json({ error: error?.message || 'Seite konnte nicht angehängt werden.' });
+  }
+});
+
+// POST /api/documents/:id/split -> zusammengefügtes Dokument wieder in Einzelbelege trennen
+documentsRouter.post('/documents/:id/split', (req: Request, res: Response) => {
+  try {
+    const id = parseId(req.params.id);
+    if (id === null) return res.status(400).json({ error: 'Ungültige Dokument-ID.' });
+    const result = splitDocument(id);
+    res.status(result.code).json(result.body);
+  } catch (error: any) {
+    console.error('Fehler beim Trennen des Dokuments:', error);
+    res.status(500).json({ error: error?.message || 'Dokument konnte nicht getrennt werden.' });
+  }
+});
+
+// GET /api/documents/:id/pages -> Herkunft der Seiten eines zusammengefügten Dokuments
+documentsRouter.get('/documents/:id/pages', (req: Request, res: Response) => {
+  try {
+    const id = parseId(req.params.id);
+    if (id === null) return res.status(400).json({ error: 'Ungültige Dokument-ID.' });
+
+    const rows = getDb()
+      .prepare(`
+        SELECT p.page_no, p.source_document_id,
+               s.title AS source_title, s.original_name AS source_original_name,
+               s.page_count AS source_page_count, s.deleted_at AS source_deleted_at
+        FROM document_pages p
+        LEFT JOIN documents s ON s.id = p.source_document_id
+        WHERE p.document_id = ?
+        ORDER BY p.page_no ASC
+      `)
+      .all(id);
+
+    res.json(rows);
+  } catch (error: any) {
+    console.error('Fehler beim Laden der Seitenherkunft:', error);
+    res.status(500).json({ error: 'Seiten konnten nicht geladen werden.' });
+  }
+});
+
+// POST /api/documents/:id/restore -> Beleg aus dem Papierkorb zurückholen
+documentsRouter.post('/documents/:id/restore', (req: Request, res: Response) => {
+  try {
+    const id = parseId(req.params.id);
+    if (id === null) return res.status(400).json({ error: 'Ungültige Dokument-ID.' });
+    const result = restoreDocument(id);
+    res.status(result.code).json(result.body);
+  } catch (error: any) {
+    console.error('Fehler beim Wiederherstellen des Dokuments:', error);
+    res.status(500).json({ error: 'Dokument konnte nicht wiederhergestellt werden.' });
+  }
+});
+
+// DELETE /api/documents/:id/purge -> endgültig löschen (Original, PDF, Vorschau, Arbeitsdateien)
+documentsRouter.delete('/documents/:id/purge', (req: Request, res: Response) => {
+  try {
+    const id = parseId(req.params.id);
+    if (id === null) return res.status(400).json({ error: 'Ungültige Dokument-ID.' });
+    const result = purgeDocument(id);
+    res.status(result.code).json(result.body);
+  } catch (error: any) {
+    console.error('Fehler beim endgültigen Löschen des Dokuments:', error);
+    res.status(500).json({ error: 'Dokument konnte nicht endgültig gelöscht werden.' });
+  }
+});
+
+// DELETE /api/documents/:id -> in den Papierkorb legen (PDF wandert nach Archiv/_Papierkorb/).
+// Endgültig gelöscht wird erst über /purge oder automatisch nach TRASH_RETENTION_DAYS Tagen.
 documentsRouter.delete('/documents/:id', (req: Request, res: Response) => {
   try {
     const id = parseInt(req.params.id, 10);
@@ -942,30 +1068,14 @@ documentsRouter.delete('/documents/:id', (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Ungültige Dokument-ID.' });
     }
 
-    const db = getDb();
-    const doc = db.prepare('SELECT * FROM documents WHERE id = ?').get(id) as any;
-    if (!doc) {
-      return res.status(404).json({ error: 'Dokument nicht gefunden.' });
-    }
+    const result = trashDocument(id);
+    if (result.code !== 200) return res.status(result.code).json(result.body);
 
-    // Physikalische Dateien löschen
-    const workScanPng = path.join(paths.workDir, `${id}.png`);
-    const workScanJpg = path.join(paths.workDir, `${id}.jpg`);
-    const filesToDelete = [doc.original_path, doc.thumb_path, doc.pdf_path, workScanPng, workScanJpg].filter(Boolean);
-    for (const filePath of filesToDelete) {
-      try {
-        if (fs.existsSync(filePath)) {
-          fs.unlinkSync(filePath);
-        }
-      } catch (fErr) {
-        console.warn(`[Dokumente] Konnte Datei ${filePath} nicht löschen:`, fErr);
-      }
-    }
-
-    // Aus DB löschen
-    db.prepare('DELETE FROM documents WHERE id = ?').run(id);
-
-    res.json({ ok: true, message: `Dokument ${id} gelöscht.` });
+    res.json({
+      ok: true,
+      id,
+      message: `Dokument ${id} in den Papierkorb verschoben (Löschung nach ${TRASH_RETENTION_DAYS} Tagen).`,
+    });
   } catch (error: any) {
     console.error('Fehler beim Löschen des Dokuments:', error);
     res.status(500).json({ error: 'Dokument konnte nicht gelöscht werden.' });

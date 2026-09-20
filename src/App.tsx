@@ -8,6 +8,8 @@ import { SettingsView } from './components/SettingsView';
 import { FolderModal } from './components/FolderModal';
 import { ImportDialog } from './components/ImportDialog';
 import { DocumentDetailDrawer } from './components/DocumentDetailDrawer';
+import { TrashView } from './components/TrashView';
+import { MergeDialog } from './components/MergeDialog';
 import {
   Folder,
   ActiveView,
@@ -31,6 +33,7 @@ import {
 export default function App() {
   const [folders, setFolders] = useState<Folder[]>([]);
   const [documents, setDocuments] = useState<ScannyDocument[]>([]);
+  const [trashDocuments, setTrashDocuments] = useState<ScannyDocument[]>([]);
   const [stats, setStats] = useState<QueueStats>({
     inbox: 0,
     queued: 0,
@@ -57,6 +60,9 @@ export default function App() {
 
   // Document Detail Drawer State
   const [selectedDoc, setSelectedDoc] = useState<ScannyDocument | null>(null);
+
+  // Belege zusammenfügen (Mehrfachauswahl im Eingang)
+  const [mergeCandidates, setMergeCandidates] = useState<ScannyDocument[] | null>(null);
 
   // Upload State
   const [isUploading, setIsUploading] = useState(false);
@@ -102,8 +108,9 @@ export default function App() {
   // 2. Dokumente & Stats laden
   const fetchDocumentsAndStats = useCallback(async () => {
     try {
-      const [docsRes, statsRes] = await Promise.all([
+      const [docsRes, trashRes, statsRes] = await Promise.all([
         fetch('/api/documents'),
+        fetch('/api/documents?deleted=1'),
         fetch('/api/stats'),
       ]);
 
@@ -127,6 +134,10 @@ export default function App() {
             });
           }
         }
+      }
+
+      if (trashRes.ok) {
+        setTrashDocuments(await trashRes.json());
       }
 
       if (statsRes.ok) {
@@ -331,12 +342,36 @@ export default function App() {
     };
   }, [handleUploadFiles]);
 
-  // Dokument löschen
+  // Dokument in den Papierkorb legen
   const handleDeleteDocument = async (id: number) => {
     const res = await fetch(`/api/documents/${id}`, { method: 'DELETE' });
     if (!res.ok) {
-      throw new Error('Löschen fehlgeschlagen');
+      const data = await res.json().catch(() => null);
+      throw new Error(data?.error || 'Löschen fehlgeschlagen');
     }
+    await fetchDocumentsAndStats();
+    await fetchFolders();
+  };
+
+  // Dokument aus dem Papierkorb zurückholen
+  const handleRestoreDocument = async (id: number) => {
+    const res = await fetch(`/api/documents/${id}/restore`, { method: 'POST' });
+    if (!res.ok) {
+      const data = await res.json().catch(() => null);
+      throw new Error(data?.error || 'Wiederherstellen fehlgeschlagen');
+    }
+    await fetchDocumentsAndStats();
+    await fetchFolders();
+  };
+
+  // Dokument endgültig löschen (inklusive aller Dateien)
+  const handlePurgeDocument = async (id: number) => {
+    const res = await fetch(`/api/documents/${id}/purge`, { method: 'DELETE' });
+    if (!res.ok) {
+      const data = await res.json().catch(() => null);
+      throw new Error(data?.error || 'Endgültiges Löschen fehlgeschlagen');
+    }
+    setSelectedDoc((prev) => (prev && prev.id === id ? null : prev));
     await fetchDocumentsAndStats();
     await fetchFolders();
   };
@@ -441,6 +476,7 @@ export default function App() {
       <Sidebar
         folders={folders}
         inboxCount={inboxDocuments.length}
+        trashCount={trashDocuments.length}
         isProcessing={isQueueActive}
         activeView={activeView}
         onSelectView={setActiveView}
@@ -514,6 +550,7 @@ export default function App() {
             onSelectDocument={(doc) => setSelectedDoc(doc)}
             onUploadFiles={handleUploadFiles}
             onRetryDocument={handleRetryDocument}
+            onMergeDocuments={(docs) => setMergeCandidates(docs)}
             isUploading={isUploading}
           />
         )}
@@ -552,6 +589,15 @@ export default function App() {
           <SearchView folders={folders} query={searchQuery} onOpenDocument={openDocumentById} />
         )}
 
+        {activeView.type === 'trash' && (
+          <TrashView
+            documents={trashDocuments}
+            onRestore={handleRestoreDocument}
+            onPurge={handlePurgeDocument}
+            onSelectDocument={(doc) => setSelectedDoc(doc)}
+          />
+        )}
+
         {activeView.type === 'settings' && <SettingsView paths={paths} health={health} />}
       </main>
 
@@ -571,12 +617,29 @@ export default function App() {
       <DocumentDetailDrawer
         document={selectedDoc}
         folders={folders}
+        inboxDocuments={inboxDocuments.filter((d) => d.status === 'inbox')}
         onClose={() => setSelectedDoc(null)}
         onRefresh={async () => {
           await fetchDocumentsAndStats();
           await fetchFolders();
         }}
+        onOpenDocument={openDocumentById}
         onDeleteDocument={handleDeleteDocument}
+        onRestoreDocument={handleRestoreDocument}
+        onPurgeDocument={handlePurgeDocument}
+      />
+
+      {/* Dialog: Belege zu einem Dokument zusammenfügen */}
+      <MergeDialog
+        isOpen={Boolean(mergeCandidates && mergeCandidates.length >= 2)}
+        documents={mergeCandidates || []}
+        onClose={() => setMergeCandidates(null)}
+        onMerged={async (merged) => {
+          setMergeCandidates(null);
+          await fetchDocumentsAndStats();
+          await fetchFolders();
+          setSelectedDoc(merged);
+        }}
       />
 
       {/* Toast Notifications (unten rechts gestapelt) */}

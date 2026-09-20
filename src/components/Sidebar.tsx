@@ -11,12 +11,14 @@ import {
   FileText,
   ScanLine,
   LayoutDashboard,
+  Trash2,
 } from 'lucide-react';
 import { Folder, ActiveView } from '../types';
 
 interface SidebarProps {
   folders: Folder[];
   inboxCount: number;
+  trashCount?: number;
   isProcessing?: boolean;
   activeView: ActiveView;
   onSelectView: (view: ActiveView) => void;
@@ -28,6 +30,7 @@ interface SidebarProps {
 export function Sidebar({
   folders,
   inboxCount,
+  trashCount = 0,
   isProcessing = false,
   activeView,
   onSelectView,
@@ -294,6 +297,27 @@ export function Sidebar({
           >
             <Search className="w-4 h-4" />
             <span>Suche</span>
+          </button>
+
+          <button
+            type="button"
+            id="nav-trash-button"
+            onClick={() => onSelectView({ type: 'trash' })}
+            className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-sm font-medium transition-all cursor-pointer ${
+              activeView.type === 'trash'
+                ? 'bg-blue-50 dark:bg-blue-950/50 text-blue-600 dark:text-blue-400 font-semibold'
+                : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800/60'
+            }`}
+          >
+            <div className="flex items-center gap-2.5">
+              <Trash2 className="w-4 h-4" />
+              <span>Papierkorb</span>
+            </div>
+            {trashCount > 0 && (
+              <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400">
+                {trashCount}
+              </span>
+            )}
           </button>
 
           <button

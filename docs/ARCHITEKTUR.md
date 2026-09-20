@@ -122,3 +122,54 @@ Entwickler müssen die folgenden 8 Regeln zwingend beachten:
 - **Erneutes Verarbeiten** füllt bei der Erkennung nur noch **leere** Felder (`applyDetection`, `isRerun`),
   damit geprüfte Werte erhalten bleiben. Ordner und Ablageort bleiben unverändert, das PDF wird ersetzt.
 - Die Schnellaktionen (Drehen, Farbmodus) in Drawer und Import-Dialog nutzen denselben `/reprocess`-Endpunkt.
+
+---
+
+## 7. Mehrseitige Dokumente & Papierkorb (Schritt 7)
+
+### Zusammenfügen
+
+- **Auslöser**: Mehrfachauswahl im Eingang → „Zu einem Dokument zusammenfügen“ öffnet
+  `src/components/MergeDialog.tsx` (Reihenfolge per Drag & Drop, zusätzlich Pfeiltasten für
+  Tastatur und Touch; Standardreihenfolge = Erfassungszeit aufsteigend).
+- **`POST /api/documents/merge { ids }`** (`server/pipeline/merge.ts`): PDFs werden mit `pdf-lib`
+  in dieser Reihenfolge verbunden, OCR-Texte mit `----- Seite N -----` getrennt aneinandergehängt.
+  Titel, Datum, Betrag, Absender, Typ und **Ordner** kommen vom ERSTEN Beleg, das Vorschaubild
+  ebenfalls (Kopie). Das Ergebnis ist ein **neues** Dokument ohne `original_path` – es kann daher
+  nicht neu aufbereitet werden (`/reprocess`, `/detect` antworten mit 409).
+- **Reihenfolge der Schritte** (Regel 7): PDF im Speicher bauen → Quellen in den Papierkorb legen
+  (erst dadurch wird der Dateiname im Archiv frei) → neues PDF schreiben → DB-Eintrag samt
+  `document_pages` anlegen. Schlägt ein späterer Schritt fehl, werden die Quellen wiederhergestellt
+  und das neue PDF gelöscht.
+- **`document_pages(document_id, page_no, source_document_id)`**: `page_no` zählt die
+  **Quelldokumente**, nicht die PDF-Seiten (ein Quelldokument kann mehrere Seiten haben).
+  `source_document_id` wird bei endgültigem Löschen der Quelle auf NULL gesetzt
+  (`ON DELETE SET NULL`) – das zusammengefügte Dokument bleibt intakt, diese Seite lässt sich dann
+  aber nicht mehr trennen.
+- **`POST /api/documents/:id/split`**: holt die Quellen aus dem Papierkorb zurück und verwirft
+  das zusammengefügte Dokument endgültig. Erst wenn mindestens eine Quelle zurück ist, wird
+  gelöscht.
+- **`POST /api/documents/:id/add-page { source_id }`** („Seite hinzufügen“ im Detail-Drawer)
+  ist bewusst ein `merge([id, source_id])`: Nur so gibt es für **beide** Teile einen Eintrag in
+  `document_pages` und „Seiten wieder trennen“ funktioniert auch hier. Das Dokument bekommt dadurch
+  eine neue ID, behält aber Titel, Datum und Ablageort – der Drawer springt auf das neue Dokument.
+
+### Papierkorb
+
+- **`documents.deleted_at`** (Migration 7). `DELETE /api/documents/:id` setzt nur noch diese Spalte
+  und verschiebt das PDF nach `ARCHIVE_DIR/_Papierkorb/`; Original, Vorschaubild und Arbeitsdateien
+  bleiben liegen, damit Wiederherstellen möglich ist.
+- **`POST /api/documents/:id/restore`** verschiebt das PDF zurück nach `Archiv/<Ordner>/` bzw.
+  `_Eingang/` und leitet den Status wieder aus dem Ordner ab (Fehler-Belege bleiben `error`).
+- **`DELETE /api/documents/:id/purge`** löscht endgültig: Original, PDF, Vorschaubild,
+  Arbeitsdateien und den DB-Eintrag.
+- **Automatisch** nach `TRASH_RETENTION_DAYS` (30) Tagen: `startTrashCleanup()` läuft beim
+  Serverstart und danach täglich (`server/index.ts`).
+- **Gelöschte Belege sind überall unsichtbar**: `GET /api/documents` (außer mit `?deleted=1`),
+  `/api/stats` (dort als eigener Zähler `trash`), `/api/search`, die Duplikatserkennung, die
+  Dokumentzähler der Ordner und `initQueue()` filtern auf `deleted_at IS NULL`.
+  `patchDocument()` lehnt Änderungen an Belegen im Papierkorb mit 409 ab.
+- Der Ordnername `_Papierkorb` kollidiert nicht mit Benutzerordnern: `validateFolderName()`
+  verbietet führende Unterstriche.
+- **Tests**: `server/pipeline/trash.test.ts` deckt Papierkorb-Lebenszyklus, 30-Tage-Aufräumen,
+  Zusammenfügen und Trennen gegen eine echte SQLite-DB mit echten PDFs ab.

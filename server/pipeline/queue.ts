@@ -60,7 +60,7 @@ export function initQueue(): void {
     .prepare(`
       SELECT id, original_name, status
       FROM documents
-      WHERE status IN ('queued', 'processing')
+      WHERE status IN ('queued', 'processing') AND deleted_at IS NULL
       ORDER BY id ASC
     `)
     .all() as { id: number; original_name: string; status: string }[];

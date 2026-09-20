@@ -16,6 +16,7 @@ export type ActiveView =
   | { type: 'inbox' }
   | { type: 'folder'; folderId: number }
   | { type: 'search' }
+  | { type: 'trash' }
   | { type: 'settings' };
 
 export interface SystemHealth {
@@ -154,9 +155,26 @@ export interface ScannyDocument {
   ocr_text: string | null;
   extraction?: string | null;
   error: string | null;
+  /** Gesetzt, solange der Beleg im Papierkorb liegt (ISO-8601, UTC). */
+  deleted_at?: string | null;
+  /** Anzahl der Quellbelege, aus denen dieses Dokument zusammengefügt wurde (0 = nicht zusammengefügt). */
+  merged_pages?: number;
   created_at: string;
   updated_at: string;
 }
+
+/** Eine Seite eines zusammengefügten Dokuments (GET /api/documents/:id/pages). */
+export interface DocumentPageInfo {
+  page_no: number;
+  source_document_id: number | null;
+  source_title: string | null;
+  source_original_name: string | null;
+  source_page_count: number | null;
+  source_deleted_at: string | null;
+}
+
+/** Nach so vielen Tagen im Papierkorb löscht Scanny endgültig (siehe server/pipeline/trash.ts). */
+export const TRASH_RETENTION_DAYS = 30;
 
 /** Ergebnis der automatischen Erkennung (documents.extraction, JSON). Spans = [start, end] im ocr_text. */
 export interface DocumentExtraction {
@@ -222,6 +240,7 @@ export interface QueueStats {
   processing: number;
   error: number;
   filed?: number;
+  trash?: number;
 }
 
 

@@ -56,7 +56,7 @@ foldersRouter.get('/folders', (req: Request, res: Response) => {
         f.created_at,
         COUNT(d.id) AS document_count
       FROM folders f
-      LEFT JOIN documents d ON d.folder_id = f.id AND d.status = 'filed'
+      LEFT JOIN documents d ON d.folder_id = f.id AND d.status = 'filed' AND d.deleted_at IS NULL
       GROUP BY f.id
       ORDER BY 
         CASE f.kind
@@ -340,7 +340,7 @@ foldersRouter.put('/folders/:id', (req: Request, res: Response) => {
 
     // Zählung der abgelegten Dokumente abrufen
     const docCountRow = db
-      .prepare("SELECT COUNT(*) as count FROM documents WHERE folder_id = ? AND status = 'filed'")
+      .prepare("SELECT COUNT(*) as count FROM documents WHERE folder_id = ? AND status = 'filed' AND deleted_at IS NULL")
       .get(id) as { count: number };
 
     const updatedFolder: FolderRow = {
@@ -380,7 +380,7 @@ foldersRouter.delete('/folders/:id', (req: Request, res: Response) => {
 
     // Prüfen, ob noch Dokumente im Ordner liegen
     const docCountRow = db
-      .prepare('SELECT COUNT(*) as count FROM documents WHERE folder_id = ?')
+      .prepare('SELECT COUNT(*) as count FROM documents WHERE folder_id = ? AND deleted_at IS NULL')
       .get(id) as { count: number };
 
     if (docCountRow && docCountRow.count > 0) {

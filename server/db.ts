@@ -329,4 +329,38 @@ function migrate(db: Database.Database): void {
     });
     runMigration6();
   }
+
+  if (currentVersion < 7) {
+    // Migration 7: Papierkorb (deleted_at) und Seiten zusammengefügter Dokumente
+    const runMigration7 = db.transaction(() => {
+      const docTableInfo = db.prepare(`PRAGMA table_info(documents)`).all() as { name: string }[];
+      const colNames = new Set(docTableInfo.map((c) => c.name));
+
+      if (!colNames.has('deleted_at')) {
+        db.exec(`ALTER TABLE documents ADD COLUMN deleted_at TEXT NULL;`);
+      }
+
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_documents_deleted_at ON documents(deleted_at);
+
+        -- Herkunft der Seiten eines zusammengefügten Dokuments.
+        -- page_no zählt die QUELLDOKUMENTE (ein Quelldokument kann mehrere PDF-Seiten haben).
+        -- source_document_id wird NULL, wenn die Quelle endgültig gelöscht wurde – dann lässt
+        -- sich diese Seite nicht mehr trennen, das zusammengefügte Dokument bleibt aber intakt.
+        CREATE TABLE IF NOT EXISTS document_pages (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+          page_no INTEGER NOT NULL,
+          source_document_id INTEGER NULL REFERENCES documents(id) ON DELETE SET NULL,
+          created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_document_pages_document ON document_pages(document_id);
+        CREATE INDEX IF NOT EXISTS idx_document_pages_source ON document_pages(source_document_id);
+
+        PRAGMA user_version = 7;
+      `);
+    });
+    runMigration7();
+  }
 }
