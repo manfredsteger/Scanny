@@ -14,10 +14,12 @@ import {
   AlignLeft,
   Copy,
   Check,
+  Crop,
 } from 'lucide-react';
 import { Folder, ScannyDocument, DocumentFormData, HighlightField, highlightSpan, parseExtraction } from '../types';
 import { DocumentForm } from './DocumentForm';
 import { OcrTextView } from './OcrTextView';
+import { CornerEditor } from './CornerEditor';
 import { DeleteConfirmModal } from './DeleteConfirmModal';
 
 interface DocumentDetailDrawerProps {
@@ -45,6 +47,7 @@ export function DocumentDetailDrawer({
   const [activeTab, setActiveTab] = useState<'preview' | 'pdf' | 'text'>('preview');
   const [copied, setCopied] = useState(false);
   const [hoveredField, setHoveredField] = useState<HighlightField>(null);
+  const [isCornerEditorOpen, setIsCornerEditorOpen] = useState(false);
 
   const handleCopyOcrText = async () => {
     if (!localDoc?.ocr_text) return;
@@ -177,8 +180,8 @@ export function DocumentDetailDrawer({
     setPreviewMode('processed');
 
     try {
-      const res = await fetch(`/api/documents/${localDoc.id}`, {
-        method: 'PATCH',
+      const res = await fetch(`/api/documents/${localDoc.id}/reprocess`, {
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ rotation: next }),
       });
@@ -198,8 +201,8 @@ export function DocumentDetailDrawer({
     setPreviewMode('processed');
 
     try {
-      const res = await fetch(`/api/documents/${localDoc.id}`, {
-        method: 'PATCH',
+      const res = await fetch(`/api/documents/${localDoc.id}/reprocess`, {
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ color_mode: mode }),
       });
@@ -232,6 +235,16 @@ export function DocumentDetailDrawer({
 
   return (
     <>
+      {isCornerEditorOpen && localDoc && (
+        <CornerEditor
+          document={localDoc}
+          onClose={() => setIsCornerEditorOpen(false)}
+          onApplied={async () => {
+            setLocalDoc((prev) => (prev ? { ...prev, status: 'queued' } : prev));
+            onRefresh();
+          }}
+        />
+      )}
       <div id="document-detail-overlay" className="fixed inset-0 z-40 flex justify-end bg-black/50 backdrop-blur-xs">
         <div
           id="document-detail-drawer"
@@ -436,8 +449,19 @@ export function DocumentDetailDrawer({
                   {/* Schnellaktionen unter der Vorschau (Drehung + Farbmodus) */}
                   {!isPdf && (
                     <div className="flex flex-wrap items-center justify-between gap-2 px-1">
-                      {/* Drehung */}
+                      {/* Drehung + Zuschnitt */}
                       <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          id="drawer-open-corner-editor"
+                          disabled={localDoc.status === 'processing' || localDoc.status === 'queued'}
+                          onClick={() => setIsCornerEditorOpen(true)}
+                          className="px-3 py-1.5 rounded-xl border border-blue-200 dark:border-blue-900 bg-blue-50 dark:bg-blue-950/50 hover:bg-blue-100 dark:hover:bg-blue-900/60 text-blue-700 dark:text-blue-300 text-xs font-semibold flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                          title="Ecken des Belegs manuell festlegen"
+                        >
+                          <Crop className="w-3.5 h-3.5" />
+                          <span>Zuschnitt anpassen</span>
+                        </button>
                         <button
                           type="button"
                           id="drawer-quick-rotate-ccw"

@@ -379,8 +379,8 @@ export function ImportDialog({
     setPreviewMode('processed');
 
     try {
-      const res = await fetch(`/api/documents/${doc.id}`, {
-        method: 'PATCH',
+      const res = await fetch(`/api/documents/${doc.id}/reprocess`, {
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ rotation: next }),
       });
@@ -404,8 +404,8 @@ export function ImportDialog({
     setPreviewMode('processed');
 
     try {
-      const res = await fetch(`/api/documents/${doc.id}`, {
-        method: 'PATCH',
+      const res = await fetch(`/api/documents/${doc.id}/reprocess`, {
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ color_mode: mode }),
       });

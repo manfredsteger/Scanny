@@ -118,7 +118,7 @@ export function applyDetection(id: number, layout: string | null): void {
   const db = getDb();
   const doc = db
     .prepare(
-      'SELECT ocr_text, title, doc_type, sender, doc_date, user_edited, folder_id, status, pdf_path, original_name, created_at FROM documents WHERE id = ?'
+      'SELECT ocr_text, title, doc_type, sender, doc_date, amount_cents, user_edited, folder_id, status, extraction, pdf_path, original_name, created_at FROM documents WHERE id = ?'
     )
     .get(id) as
     | {
@@ -127,9 +127,11 @@ export function applyDetection(id: number, layout: string | null): void {
         doc_type: string | null;
         sender: string | null;
         doc_date: string | null;
+        amount_cents: number | null;
         user_edited: string | null;
         folder_id: number | null;
         status: string;
+        extraction: string | null;
         pdf_path: string | null;
         original_name: string | null;
         created_at: string | null;
@@ -145,12 +147,18 @@ export function applyDetection(id: number, layout: string | null): void {
   const det = detectDocument(doc.ocr_text, layout);
   const edited = parseUserEdited(doc.user_edited);
 
+  // Beim erneuten Verarbeiten (Ecken/Drehung/Farbmodus geändert) nur noch LEERE Felder füllen,
+  // damit bereits geprüfte Werte nicht überschrieben werden. Erstlauf: alles vorschlagen.
+  const isRerun = Boolean(doc.extraction);
+  const mayFill = (field: string, current: unknown) =>
+    !edited.has(field) && (!isRerun || current === null || current === undefined || current === '');
+
   const updates: Record<string, string | number | null> = {};
-  if (!edited.has('doc_type')) updates.doc_type = det.type;
-  if (!edited.has('sender') && det.sender) updates.sender = det.sender;
-  if (!edited.has('doc_date') && det.date) updates.doc_date = det.date;
-  if (!edited.has('amount_cents') && det.amountCents !== null) updates.amount_cents = det.amountCents;
-  if (!edited.has('title')) {
+  if (mayFill('doc_type', doc.doc_type)) updates.doc_type = det.type;
+  if (mayFill('sender', doc.sender) && det.sender) updates.sender = det.sender;
+  if (mayFill('doc_date', doc.doc_date) && det.date) updates.doc_date = det.date;
+  if (mayFill('amount_cents', doc.amount_cents) && det.amountCents !== null) updates.amount_cents = det.amountCents;
+  if (mayFill('title', doc.title)) {
     // Titel aus den endgültigen Werten bauen (vom Nutzer gesetzte Typen/Absender zählen mit)
     const title = buildTitle(
       (updates.doc_type as string | undefined) ?? doc.doc_type,
@@ -227,6 +235,35 @@ function runDetectionSafely(id: number, layout: string | null): void {
   } catch (err) {
     console.warn(`[Erkennung] Fehler bei Dokument ${id} (Dokument bleibt ohne Vorschläge):`, err);
   }
+}
+
+/**
+ * Stellt das EXIF-korrigierte Arbeitsbild (DATA_DIR/work/<id>.jpg) sicher und liefert seinen Pfad.
+ * Erzeugt es bei Bedarf neu aus dem Original (HEIC über heif-convert). Für PDF-Eingänge: null.
+ */
+export async function ensureWorkImage(id: number): Promise<string | null> {
+  const db = getDb();
+  const doc = db.prepare('SELECT original_path FROM documents WHERE id = ?').get(id) as
+    | { original_path: string | null }
+    | undefined;
+  if (!doc?.original_path || !fs.existsSync(doc.original_path)) return null;
+
+  const ext = path.extname(doc.original_path).toLowerCase();
+  if (ext === '.pdf') return null;
+
+  if (!fs.existsSync(paths.workDir)) fs.mkdirSync(paths.workDir, { recursive: true });
+  const workJpg = path.join(paths.workDir, `${id}.jpg`);
+  if (fs.existsSync(workJpg)) return workJpg;
+
+  if (['.heic', '.heif'].includes(ext)) {
+    await execFileAsync('heif-convert', ['-q', '92', doc.original_path, workJpg], { timeout: 120000 });
+    const tempRotated = path.join(paths.workDir, `${id}_temp.jpg`);
+    await sharp(workJpg).rotate().jpeg({ quality: 95 }).toFile(tempRotated);
+    fs.renameSync(tempRotated, workJpg);
+  } else {
+    await sharp(doc.original_path).rotate().jpeg({ quality: 95 }).toFile(workJpg);
+  }
+  return workJpg;
 }
 
 /**
@@ -373,7 +410,8 @@ export async function processDocument(id: number): Promise<void> {
     const intermediateJpg = path.join(paths.workDir, `${id}.jpg`);
     const isHeic = ['.heic', '.heif'].includes(ext);
 
-    // 1. Arbeitskopie erzeugen (EXIF-korrigiert oder HEIC-konvertiert)
+    // 1. Arbeitskopie erzeugen (EXIF-korrigiert oder HEIC-konvertiert).
+    // Immer neu erzeugen: Das Original kann sich seit dem letzten Lauf geändert haben.
     if (isHeic) {
       // HEIC/HEIF: vorher mit "heif-convert -q 92 <in> <DATA_DIR/work/<id>.jpg>" umwandeln
       console.log(`[Pipeline] Konvertiere HEIC nach JPEG: ${origPath} -> ${intermediateJpg}`);

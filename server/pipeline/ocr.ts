@@ -88,8 +88,9 @@ export function cleanupWorkFiles(id: number): void {
     if (!fs.existsSync(paths.workDir)) return;
     const entries = fs.readdirSync(paths.workDir);
     for (const entry of entries) {
-      if (entry === `${id}.png`) {
-        // PNG bleibt als Cache für die Anzeige!
+      if (entry === `${id}.png` || entry === `${id}.jpg`) {
+        // PNG (aufbereitet) und JPG (EXIF-korrigiertes Arbeitsbild) bleiben als Cache für
+        // Anzeige und Ecken-Editor – beide sind jederzeit neu erzeugbar.
         continue;
       }
       if (entry.startsWith(`${id}.`) || entry.startsWith(`${id}_`)) {

@@ -101,3 +101,24 @@ Entwickler müssen die folgenden 8 Regeln zwingend beachten:
 - **Suche**: `GET /api/search` (FTS5, bm25, `snippet()` mit Steuerzeichen `\u0001…\u0002` als Markierung).
   Nutzereingaben immer über `buildFtsQuery()` (`server/search.ts`) escapen.
 - **Tests**: `npm test` (vitest) – `server/**/*.test.ts`, vom Server-Build ausgeschlossen.
+
+---
+
+## 6. Nachbearbeitung (Schritt 6)
+
+- **Ecken-Editor** (`src/components/CornerEditor.tsx`), geöffnet über „Zuschnitt anpassen“ im Detail-Drawer:
+  SVG-Overlay über `GET /api/documents/:id/work-preview`, 4 Griffe (Pointer Events, Maus + Touch),
+  Lupe mit 2-facher Vergrößerung beim Ziehen, „Automatisch erkennen“, „Ganzes Bild“, Drehen, Farbmodus.
+  Das SVG nutzt `viewBox` in Bildkoordinaten – damit stimmen Vorschau- und Originalmaße immer überein.
+- **Koordinatensystem**: Ecken und Vorschau beziehen sich auf das **gedrehte** Arbeitsbild (Regel 8).
+  `work-preview` liefert deshalb gedreht aus; `?rotation=` überschreibt die gespeicherte Drehung
+  (Vorschau im Editor, bevor gespeichert wird).
+- **Arbeitsbild**: `DATA_DIR/work/<id>.jpg` (EXIF-korrigiert) bleibt als Cache liegen und wird von
+  `ensureWorkImage(id)` bei Bedarf aus dem Original neu erzeugt (HEIC über `heif-convert`).
+- **Endpunkte**: `GET /api/documents/:id/work-meta` (Maße im Ecken-Koordinatensystem, gespeicherte Ecken),
+  `POST /api/documents/:id/detect` (scan.py `--detect-only`, optional mit abweichender Drehung),
+  `POST /api/documents/:id/reprocess` `{ corners?, rotation?, color_mode? }` – prüft die Werte und
+  läuft über `patchDocument()`; PDFs werden mit 409 abgelehnt.
+- **Erneutes Verarbeiten** füllt bei der Erkennung nur noch **leere** Felder (`applyDetection`, `isRerun`),
+  damit geprüfte Werte erhalten bleiben. Ordner und Ablageort bleiben unverändert, das PDF wird ersetzt.
+- Die Schnellaktionen (Drehen, Farbmodus) in Drawer und Import-Dialog nutzen denselben `/reprocess`-Endpunkt.

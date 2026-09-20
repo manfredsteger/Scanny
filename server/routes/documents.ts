@@ -6,6 +6,7 @@ import sharp from 'sharp';
 import { getDb, paths } from '../db.js';
 import { ingestFile } from '../pipeline/ingest.js';
 import { documentQueue } from '../pipeline/queue.js';
+import { ensureWorkImage, runScanPy } from '../pipeline/processDocument.js';
 import { moveOrCopySync, planArchivePdf } from '../pipeline/ocr.js';
 import { buildFtsQuery, SNIPPET_END, SNIPPET_START } from '../search.js';
 
@@ -459,7 +460,149 @@ documentsRouter.get('/documents/:id/pdf', (req: Request, res: Response) => {
   }
 });
 
-// GET /api/documents/:id/work-preview -> DATA_DIR/work/<id>.jpg, verkleinert auf max. 1600 px, Cache-Control no-cache
+/** Ecken aus dem Request prüfen: 4 Punkte [[x,y],…] mit endlichen Zahlen. */
+function parseCorners(raw: any): { corners: [number, number][] | null; error?: string } {
+  if (raw === null) return { corners: null };
+  let value = raw;
+  if (typeof value === 'string') {
+    try {
+      value = JSON.parse(value);
+    } catch {
+      return { corners: null, error: 'Ecken sind kein gültiges JSON.' };
+    }
+  }
+  if (!Array.isArray(value) || value.length !== 4) {
+    return { corners: null, error: 'Es müssen genau 4 Ecken übergeben werden.' };
+  }
+  const points: [number, number][] = [];
+  for (const point of value) {
+    if (!Array.isArray(point) || point.length !== 2) {
+      return { corners: null, error: 'Jede Ecke muss aus zwei Zahlen bestehen.' };
+    }
+    const x = Number(point[0]);
+    const y = Number(point[1]);
+    if (!isFinite(x) || !isFinite(y) || x < 0 || y < 0) {
+      return { corners: null, error: 'Ecken enthalten ungültige Koordinaten.' };
+    }
+    points.push([x, y]);
+  }
+  return { corners: points };
+}
+
+// GET /api/documents/:id/work-meta -> Maße des (gedrehten) Arbeitsbildes + gespeicherte Ecken für den Editor
+documentsRouter.get('/documents/:id/work-meta', async (req: Request, res: Response) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) return res.status(400).json({ error: 'Ungültige Dokument-ID.' });
+
+    const doc = getDb()
+      .prepare('SELECT corners, rotation, color_mode, detected FROM documents WHERE id = ?')
+      .get(id) as any;
+    if (!doc) return res.status(404).json({ error: 'Dokument nicht gefunden.' });
+
+    const workPath = await ensureWorkImage(id);
+    if (!workPath) {
+      return res.status(409).json({ error: 'Für dieses Dokument gibt es kein bearbeitbares Bild (z. B. PDF).' });
+    }
+
+    const meta = await sharp(workPath).metadata();
+    const rotation = (((doc.rotation || 0) % 360) + 360) % 360;
+    const swap = rotation === 90 || rotation === 270;
+    let corners: any = null;
+    if (doc.corners) {
+      try {
+        corners = JSON.parse(doc.corners);
+      } catch {
+        corners = null;
+      }
+    }
+
+    res.json({
+      // Maße im Koordinatensystem der Ecken (= bereits gedrehtes Arbeitsbild, Regel 8)
+      width: swap ? meta.height : meta.width,
+      height: swap ? meta.width : meta.height,
+      rotation,
+      color_mode: doc.color_mode || 'bw',
+      corners,
+      detected: doc.detected,
+    });
+  } catch (error: any) {
+    console.error('Fehler beim Laden der Arbeitsbild-Maße:', error);
+    res.status(500).json({ error: 'Arbeitsbild konnte nicht gelesen werden.' });
+  }
+});
+
+// POST /api/documents/:id/detect -> Ecken automatisch erkennen (scan.py --detect-only)
+documentsRouter.post('/documents/:id/detect', async (req: Request, res: Response) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) return res.status(400).json({ error: 'Ungültige Dokument-ID.' });
+
+    const doc = getDb().prepare('SELECT rotation FROM documents WHERE id = ?').get(id) as any;
+    if (!doc) return res.status(404).json({ error: 'Dokument nicht gefunden.' });
+
+    const workPath = await ensureWorkImage(id);
+    if (!workPath) {
+      return res.status(409).json({ error: 'Für dieses Dokument gibt es kein bearbeitbares Bild (z. B. PDF).' });
+    }
+
+    // Drehung aus dem Request erlaubt die Erkennung im Editor vor dem Speichern
+    const rotationRaw = Number(req.body?.rotation);
+    const rotation = [0, 90, 180, 270].includes(rotationRaw) ? rotationRaw : doc.rotation || 0;
+
+    const result = await runScanPy({ inputPath: workPath, rotation, detectOnly: true });
+    if (!result.ok) {
+      return res.status(500).json({ error: result.error || 'Ecken konnten nicht erkannt werden.' });
+    }
+    res.json({
+      corners: result.corners,
+      detected: Boolean(result.detected),
+      width: result.width,
+      height: result.height,
+    });
+  } catch (error: any) {
+    console.error('Fehler bei der Eckenerkennung:', error);
+    res.status(500).json({ error: error?.message || 'Ecken konnten nicht erkannt werden.' });
+  }
+});
+
+// POST /api/documents/:id/reprocess { corners?, rotation?, color_mode? } -> neu aufbereiten
+documentsRouter.post('/documents/:id/reprocess', (req: Request, res: Response) => {
+  const id = parseInt(req.params.id, 10);
+  if (isNaN(id)) return res.status(400).json({ error: 'Ungültige Dokument-ID.' });
+
+  const doc = getDb().prepare('SELECT original_path FROM documents WHERE id = ?').get(id) as any;
+  if (!doc) return res.status(404).json({ error: 'Dokument nicht gefunden.' });
+  if ((doc.original_path || '').toLowerCase().endsWith('.pdf')) {
+    return res.status(409).json({ error: 'PDF-Dokumente können nicht neu aufbereitet werden.' });
+  }
+
+  const { corners, rotation, color_mode } = req.body || {};
+  const patch: any = { reprocess: true };
+
+  if (corners !== undefined) {
+    const parsed = parseCorners(corners);
+    if (parsed.error) return res.status(400).json({ error: parsed.error });
+    patch.corners = parsed.corners;
+  }
+  if (rotation !== undefined) {
+    if (![0, 90, 180, 270].includes(Number(rotation))) {
+      return res.status(400).json({ error: 'Drehung muss 0, 90, 180 oder 270 sein.' });
+    }
+    patch.rotation = Number(rotation);
+  }
+  if (color_mode !== undefined) {
+    if (!['bw', 'gray', 'color'].includes(color_mode)) {
+      return res.status(400).json({ error: 'Farbmodus muss bw, gray oder color sein.' });
+    }
+    patch.color_mode = color_mode;
+  }
+
+  const result = patchDocument(id, patch);
+  res.status(result.code).json(result.body);
+});
+
+// GET /api/documents/:id/work-preview -> DATA_DIR/work/<id>.jpg (gedreht), max. 1600 px, Cache-Control no-cache
 documentsRouter.get('/documents/:id/work-preview', async (req: Request, res: Response) => {
   try {
     const id = parseInt(req.params.id, 10);
@@ -467,31 +610,28 @@ documentsRouter.get('/documents/:id/work-preview', async (req: Request, res: Res
       return res.status(400).json({ error: 'Ungültige Dokument-ID.' });
     }
 
-    const workPath = path.join(paths.workDir, `${id}.jpg`);
+    const workPath = (await ensureWorkImage(id)) || path.join(paths.workDir, `${id}.jpg`);
     if (!fs.existsSync(workPath)) {
       return res.status(404).json({ error: 'Arbeitsbild nicht gefunden.' });
     }
 
+    // Gedreht ausliefern (gleiches Koordinatensystem wie die Ecken, Regel 8).
+    // ?rotation= erlaubt die Vorschau im Editor vor dem Speichern.
+    const doc = getDb().prepare('SELECT rotation FROM documents WHERE id = ?').get(id) as any;
+    const rotationRaw = Number(req.query.rotation);
+    const rotation = [0, 90, 180, 270].includes(rotationRaw)
+      ? rotationRaw
+      : (((doc?.rotation || 0) % 360) + 360) % 360;
+
     res.setHeader('Content-Type', 'image/jpeg');
     res.setHeader('Cache-Control', 'no-cache');
 
-    const image = sharp(workPath);
-    const metadata = await image.metadata();
-
-    if ((metadata.width && metadata.width > 1600) || (metadata.height && metadata.height > 1600)) {
-      const resized = await image
-        .resize({
-          width: 1600,
-          height: 1600,
-          fit: 'inside',
-          withoutEnlargement: true,
-        })
-        .jpeg({ quality: 90 })
-        .toBuffer();
-      return res.send(resized);
-    }
-
-    return res.sendFile(workPath);
+    const buffer = await sharp(workPath)
+      .rotate(rotation)
+      .resize({ width: 1600, height: 1600, fit: 'inside', withoutEnlargement: true })
+      .jpeg({ quality: 90 })
+      .toBuffer();
+    return res.send(buffer);
   } catch (error: any) {
     console.error('Fehler beim Ausliefern des Arbeitsbildes:', error);
     res.status(500).json({ error: 'Arbeitsbild konnte nicht ausgeliefert werden.' });
