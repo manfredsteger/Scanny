@@ -14,6 +14,8 @@ import {
   List,
   ChevronUp,
   ChevronDown,
+  Download,
+  Check,
 } from 'lucide-react';
 import {
   Folder,
@@ -26,6 +28,7 @@ import {
   formatIsoDateDe,
   typeChipClass,
 } from '../types';
+import { ExportDialog } from './ExportDialog';
 
 type SortKey = 'doc_date' | 'doc_type' | 'title' | 'sender' | 'amount_cents' | 'page_count';
 
@@ -62,6 +65,8 @@ export function FolderView({
   const [sortAsc, setSortAsc] = useState(false);
   const [monthFilter, setMonthFilter] = useState<string>('all');
   const [typeFilter, setTypeFilter] = useState<string>('all');
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [isExportOpen, setIsExportOpen] = useState(false);
 
   const setViewMode = (mode: 'table' | 'tiles') => {
     setViewModeState(mode);
@@ -103,6 +108,45 @@ export function FolderView({
   });
 
   const totalCents = filteredDocs.reduce((sum, d) => sum + (d.amount_cents || 0), 0);
+
+  // Auswahl beim Ordnerwechsel leeren
+  React.useEffect(() => {
+    setSelectedIds(new Set());
+  }, [folder.id]);
+
+  // Belege, die den Ordner verlassen haben, aus der Auswahl nehmen
+  React.useEffect(() => {
+    setSelectedIds((prev) => {
+      const gueltig = new Set(folderDocs.map((d) => d.id));
+      const next = new Set([...prev].filter((id) => gueltig.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [documents]);
+
+  const selectedList = folderDocs.filter((d) => selectedIds.has(d.id));
+
+  const toggleSelect = (id: number) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const alleGefiltertMarkiert =
+    sortedDocs.length > 0 && sortedDocs.every((d) => selectedIds.has(d.id));
+
+  const toggleSelectAll = () => {
+    setSelectedIds((prev) => {
+      if (alleGefiltertMarkiert) {
+        const next = new Set(prev);
+        sortedDocs.forEach((d) => next.delete(d.id));
+        return next;
+      }
+      return new Set([...prev, ...sortedDocs.map((d) => d.id)]);
+    });
+  };
 
   const toggleSort = (key: SortKey) => {
     if (key === sortKey) setSortAsc(!sortAsc);
@@ -195,6 +239,17 @@ export function FolderView({
         </div>
 
         <div className="flex items-center gap-2">
+          <button
+            type="button"
+            id="folder-export-button"
+            onClick={() => setIsExportOpen(true)}
+            disabled={folderDocs.length === 0}
+            title={folderDocs.length === 0 ? 'Dieser Ordner enthält noch keine Belege' : 'Belege exportieren'}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-blue-600 hover:bg-blue-700 text-white shadow-xs transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <Download className="w-3.5 h-3.5" />
+            <span>Exportieren{selectedList.length > 0 ? ` (${selectedList.length})` : '…'}</span>
+          </button>
           <button
             type="button"
             id="edit-folder-button"
@@ -299,6 +354,23 @@ export function FolderView({
             <table id="folder-table" className="w-full text-sm">
               <thead className="bg-zinc-50 dark:bg-zinc-800/60 text-[11px] uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
                 <tr>
+                  <th className="px-3 py-2.5 w-10">
+                    <button
+                      type="button"
+                      id="folder-select-all"
+                      role="checkbox"
+                      aria-checked={alleGefiltertMarkiert}
+                      aria-label="Alle sichtbaren Belege markieren"
+                      onClick={toggleSelectAll}
+                      className={`w-4 h-4 rounded border-2 flex items-center justify-center transition-all cursor-pointer ${
+                        alleGefiltertMarkiert
+                          ? 'bg-blue-600 border-blue-600 text-white'
+                          : 'border-zinc-300 dark:border-zinc-600 text-transparent hover:border-blue-400'
+                      }`}
+                    >
+                      <Check className="w-3 h-3" />
+                    </button>
+                  </th>
                   {(
                     [
                       ['doc_date', 'Datum', 'text-left w-28'],
@@ -332,8 +404,32 @@ export function FolderView({
                     key={doc.id}
                     id={`folder-row-${doc.id}`}
                     onClick={() => onSelectDocument && onSelectDocument(doc)}
-                    className="hover:bg-blue-50/50 dark:hover:bg-blue-950/20 cursor-pointer"
+                    className={`cursor-pointer ${
+                      selectedIds.has(doc.id)
+                        ? 'bg-blue-50 dark:bg-blue-950/30'
+                        : 'hover:bg-blue-50/50 dark:hover:bg-blue-950/20'
+                    }`}
                   >
+                    <td className="px-3 py-2.5">
+                      <button
+                        type="button"
+                        id={`folder-select-${doc.id}`}
+                        role="checkbox"
+                        aria-checked={selectedIds.has(doc.id)}
+                        aria-label="Beleg markieren"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleSelect(doc.id);
+                        }}
+                        className={`w-4 h-4 rounded border-2 flex items-center justify-center transition-all cursor-pointer ${
+                          selectedIds.has(doc.id)
+                            ? 'bg-blue-600 border-blue-600 text-white'
+                            : 'border-zinc-300 dark:border-zinc-600 text-transparent hover:border-blue-400'
+                        }`}
+                      >
+                        <Check className="w-3 h-3" />
+                      </button>
+                    </td>
                     <td className="px-4 py-2.5 font-mono text-xs text-zinc-600 dark:text-zinc-300 whitespace-nowrap">
                       {formatIsoDateDe(doc.doc_date) || '–'}
                     </td>
@@ -358,7 +454,7 @@ export function FolderView({
                 ))}
                 {sortedDocs.length === 0 && (
                   <tr>
-                    <td colSpan={6} className="px-4 py-8 text-center text-xs text-zinc-500">
+                    <td colSpan={7} className="px-4 py-8 text-center text-xs text-zinc-500">
                       Keine Belege für diesen Filter.
                     </td>
                   </tr>
@@ -366,8 +462,13 @@ export function FolderView({
               </tbody>
               <tfoot className="bg-zinc-50 dark:bg-zinc-800/60 text-xs font-semibold text-zinc-700 dark:text-zinc-300">
                 <tr>
-                  <td id="folder-table-count" colSpan={4} className="px-4 py-2.5">
+                  <td id="folder-table-count" colSpan={5} className="px-4 py-2.5">
                     {filteredDocs.length} {filteredDocs.length === 1 ? 'Dokument' : 'Dokumente'}
+                    {selectedList.length > 0 && (
+                      <span className="ml-2 font-normal text-blue-700 dark:text-blue-300">
+                        · {selectedList.length} markiert
+                      </span>
+                    )}
                   </td>
                   <td id="folder-table-sum" className="px-4 py-2.5 text-right font-mono">
                     {formatEuro(totalCents)}
@@ -401,9 +502,37 @@ export function FolderView({
             return (
               <div
                 key={doc.id}
-                onClick={() => onSelectDocument && onSelectDocument(doc)}
-                className="group relative rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 hover:border-blue-400 dark:hover:border-blue-600/80 transition-all cursor-pointer overflow-hidden flex flex-col justify-between shadow-xs hover:shadow-md"
+                onClick={(e) => {
+                  // Bei aktiver Auswahl wählt ein Klick aus, statt den Beleg zu öffnen
+                  if (selectedIds.size > 0) toggleSelect(doc.id);
+                  else onSelectDocument && onSelectDocument(doc);
+                }}
+                className={`group relative rounded-2xl border bg-white dark:bg-zinc-900 transition-all cursor-pointer overflow-hidden flex flex-col justify-between shadow-xs hover:shadow-md ${
+                  selectedIds.has(doc.id)
+                    ? 'border-blue-500 ring-2 ring-blue-500/40'
+                    : 'border-zinc-200 dark:border-zinc-800 hover:border-blue-400 dark:hover:border-blue-600/80'
+                }`}
               >
+                <button
+                  type="button"
+                  id={`folder-tile-select-${doc.id}`}
+                  role="checkbox"
+                  aria-checked={selectedIds.has(doc.id)}
+                  aria-label="Beleg markieren"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    toggleSelect(doc.id);
+                  }}
+                  className={`absolute top-2 left-2 z-10 w-6 h-6 rounded-lg border-2 flex items-center justify-center transition-all cursor-pointer ${
+                    selectedIds.has(doc.id)
+                      ? 'bg-blue-600 border-blue-600 text-white opacity-100'
+                      : `bg-white/90 dark:bg-zinc-900/90 border-zinc-300 dark:border-zinc-600 text-transparent ${
+                          selectedIds.size > 0 ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 focus:opacity-100'
+                        }`
+                  }`}
+                >
+                  <Check className="w-3.5 h-3.5" />
+                </button>
                 {/* Vorschaubild */}
                 <div className="h-44 bg-zinc-100 dark:bg-zinc-950/80 flex items-center justify-center overflow-hidden relative border-b border-zinc-100 dark:border-zinc-800/80">
                   {doc.thumb_path ? (
@@ -469,6 +598,14 @@ export function FolderView({
           })}
         </div>
       )}
+
+      <ExportDialog
+        isOpen={isExportOpen}
+        folder={folder}
+        documents={folderDocs}
+        selectedIds={selectedList.map((d) => d.id)}
+        onClose={() => setIsExportOpen(false)}
+      />
 
       {folderDocs.length > 0 && viewMode === 'tiles' && (
         <p id="folder-tiles-summary" className="text-xs font-semibold text-zinc-600 dark:text-zinc-400 text-right">

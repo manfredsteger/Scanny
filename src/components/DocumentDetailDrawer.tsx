@@ -156,6 +156,23 @@ export function DocumentDetailDrawer({
     };
   }, [localDoc?.id, localDoc?.merged_pages]);
 
+  // Esc schließt den Drawer – aber nicht, wenn darüber noch ein Dialog offen ist
+  // (Ecken-Editor, Löschen-Bestätigung) oder gerade in einem Feld getippt wird.
+  useEffect(() => {
+    if (!document) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      if (isCornerEditorOpen || isDeleteModalOpen || isPurgeModalOpen || isSplitWarningOpen) return;
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target?.isContentEditable) return;
+      e.preventDefault();
+      onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [document, isCornerEditorOpen, isDeleteModalOpen, isPurgeModalOpen, isSplitWarningOpen, onClose]);
+
   // Polling wenn das Dokument neu aufbereitet wird
   useEffect(() => {
     if (!localDoc || (localDoc.status !== 'queued' && localDoc.status !== 'processing')) {

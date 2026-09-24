@@ -1,0 +1,25 @@
+# Ohne diese Datei kopiert "COPY . ." die lokalen node_modules vom Mac in den Linux-Container
+# und überschreibt die dort frisch installierten Pakete – native Module (rolldown, sharp,
+# better-sqlite3) passen dann nicht zur Plattform und der Build bricht ab.
+node_modules/
+
+# Build-Artefakte entstehen im Container neu
+dist/
+server/dist/
+build/
+coverage/
+
+# Daten und Geheimnisse gehören niemals ins Image (Regel 4)
+data/
+scanny/
+.env
+.env.local
+!.env.example
+
+# Sonstiges
+.git/
+.gitignore
+.DS_Store
+*.log
+__pycache__/
+*.pyc

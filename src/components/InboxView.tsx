@@ -29,6 +29,7 @@ interface InboxViewProps {
   onSelectDocument: (doc: ScannyDocument) => void;
   onUploadFiles: (files: FileList | File[]) => Promise<void>;
   onRetryDocument: (id: number) => Promise<void>;
+  onDeleteDocument: (id: number) => Promise<void>;
   onMergeDocuments: (docs: ScannyDocument[]) => void;
   isUploading?: boolean;
 }
@@ -42,6 +43,7 @@ export function InboxView({
   onSelectDocument,
   onUploadFiles,
   onRetryDocument,
+  onDeleteDocument,
   onMergeDocuments,
   isUploading = false,
 }: InboxViewProps) {
@@ -51,6 +53,7 @@ export function InboxView({
   const [bulkFolderId, setBulkFolderId] = useState<string>('');
   const [busy, setBusy] = useState(false);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
+  const [focusedId, setFocusedId] = useState<number | null>(null);
 
   // Nur fertig aufbereitete Belege sind auswählbar / ablegbar
   const selectableDocs = documents.filter((d) => d.status === 'inbox');
@@ -113,6 +116,76 @@ export function InboxView({
     }
   };
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // --- Tastenkürzel -------------------------------------------------------
+  // Pfeiltasten navigieren, Enter öffnet, "a" legt in den vorgeschlagenen Ordner ab,
+  // Entf verschiebt in den Papierkorb. Greift nur, wenn kein Dialog offen ist und
+  // nicht gerade in ein Feld getippt wird.
+  React.useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target?.isContentEditable) return;
+      // Kein Zugriff, solange ein Dialog oder der Detail-Drawer offen ist
+      if (window.document.querySelector('[role="dialog"]')) return;
+      if (selectableDocs.length === 0) return;
+
+      const index = focusedId === null ? -1 : selectableDocs.findIndex((d) => d.id === focusedId);
+      const move = (delta: number) => {
+        e.preventDefault();
+        const next =
+          index === -1
+            ? delta > 0
+              ? 0
+              : selectableDocs.length - 1
+            : Math.min(Math.max(index + delta, 0), selectableDocs.length - 1);
+        const doc = selectableDocs[next];
+        setFocusedId(doc.id);
+        window.document.getElementById(`doc-card-${doc.id}`)?.scrollIntoView({ block: 'nearest' });
+      };
+
+      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') return move(1);
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') return move(-1);
+
+      const current = index >= 0 ? selectableDocs[index] : null;
+      if (!current) return;
+
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        onSelectDocument(current);
+        return;
+      }
+      if (e.key === 'a' || e.key === 'A') {
+        const ziel = folders.find((f) => f.id === suggestFolderId(folders, current.doc_date));
+        e.preventDefault();
+        if (!ziel) {
+          flash('Für diesen Beleg gibt es keinen passenden Ordner.');
+          return;
+        }
+        fileDocuments([current.id], ziel.id);
+        return;
+      }
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        e.preventDefault();
+        const titel = current.title || current.original_name;
+        onDeleteDocument(current.id)
+          .then(() => flash(`»${titel}« liegt jetzt im Papierkorb.`))
+          .catch((err: any) => flash(err?.message || 'Löschen fehlgeschlagen.'));
+        return;
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selectableDocs, focusedId, folders, onSelectDocument, onDeleteDocument]);
+
+  // Fokus aufräumen, wenn der Beleg den Eingang verlässt
+  React.useEffect(() => {
+    if (focusedId !== null && !selectableDocs.some((d) => d.id === focusedId)) {
+      setFocusedId(null);
+    }
+  }, [documents, focusedId]);
+
 
   const displayWatchDir = paths?.hostWatchDir || paths?.watchDir;
 
@@ -226,6 +299,19 @@ export function InboxView({
           </button>
         </div>
       </div>
+
+      {/* Tastenkürzel-Hinweis */}
+      {selectableDocs.length > 0 && (
+        <p id="inbox-shortcut-hint" className="text-[11px] text-zinc-400 dark:text-zinc-500 -mt-2">
+          Tastatur: <kbd className="px-1 py-0.5 border border-zinc-200 dark:border-zinc-700 rounded font-mono">←</kbd>{' '}
+          <kbd className="px-1 py-0.5 border border-zinc-200 dark:border-zinc-700 rounded font-mono">→</kbd> blättern ·{' '}
+          <kbd className="px-1 py-0.5 border border-zinc-200 dark:border-zinc-700 rounded font-mono">Enter</kbd> öffnen ·{' '}
+          <kbd className="px-1 py-0.5 border border-zinc-200 dark:border-zinc-700 rounded font-mono">A</kbd> in den
+          vorgeschlagenen Ordner ablegen ·{' '}
+          <kbd className="px-1 py-0.5 border border-zinc-200 dark:border-zinc-700 rounded font-mono">Entf</kbd> in den
+          Papierkorb
+        </p>
+      )}
 
       {/* Dropzone am oberen Rand */}
       <div
@@ -341,8 +427,18 @@ export function InboxView({
           <h3 className="text-base font-semibold text-zinc-900 dark:text-white">
             Eingang ist leer
           </h3>
-          <p className="text-xs text-zinc-500 dark:text-zinc-400 max-w-sm mx-auto mt-1">
-            Alle Belege wurden geprüft und abgelegt. Ziehe neue Dateien hierher oder lege sie in den Upload-Ordner auf deinem Mac.
+          <p className="text-xs text-zinc-500 dark:text-zinc-400 max-w-md mx-auto mt-1 leading-relaxed">
+            Hier ist gerade nichts zu prüfen. Zieh Fotos oder PDFs hierher – oder leg sie in den Ordner
+            {displayWatchDir ? ' ' : ' Scanny/Upload'}
+            {displayWatchDir && (
+              <code className="px-1.5 py-0.5 mx-0.5 bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 rounded font-mono text-[11px]">
+                {displayWatchDir}
+              </code>
+            )}
+            , dann erfasst Scanny sie von selbst.
+          </p>
+          <p className="text-[11px] text-zinc-400 dark:text-zinc-500 mt-3">
+            Vom iPhone: per AirDrop auf den Mac schicken und die Datei hier ablegen.
           </p>
         </div>
       ) : (
@@ -446,6 +542,8 @@ export function InboxView({
                 className={`group relative rounded-2xl border bg-white dark:bg-zinc-900 transition-all cursor-pointer overflow-hidden flex flex-col justify-between shadow-xs hover:shadow-md ${
                   isSelected
                     ? 'border-blue-500 ring-2 ring-blue-500/40'
+                    : focusedId === doc.id
+                    ? 'border-blue-400 ring-2 ring-blue-400/30'
                     : 'border-zinc-200 dark:border-zinc-800 hover:border-blue-400 dark:hover:border-blue-600/80'
                 }`}
               >

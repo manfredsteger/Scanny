@@ -129,7 +129,30 @@ export function DashboardView({ documents, folders, onOpenInbox, onOpenFolder, o
           Zuletzt erfasst
         </h3>
         {recent.length === 0 ? (
-          <p className="text-sm text-zinc-500 dark:text-zinc-400">Noch keine Belege erfasst.</p>
+          <div
+            id="dash-empty"
+            className="text-center py-12 border border-dashed border-zinc-200 dark:border-zinc-800 rounded-2xl bg-white dark:bg-zinc-900/30 px-6"
+          >
+            <div className="w-12 h-12 rounded-2xl bg-blue-50 dark:bg-blue-950/50 text-blue-600 dark:text-blue-400 flex items-center justify-center mx-auto mb-3">
+              <Inbox className="w-6 h-6" />
+            </div>
+            <h4 className="text-sm font-semibold text-zinc-900 dark:text-white">Noch keine Belege erfasst</h4>
+            <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1 max-w-md mx-auto leading-relaxed">
+              Zieh Fotos oder PDFs einfach ins Fenster – oder leg sie in den Ordner{' '}
+              <code className="px-1.5 py-0.5 bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 rounded font-mono text-[11px]">
+                Scanny/Upload
+              </code>{' '}
+              auf deinem Mac. Scanny richtet sie gerade, erkennt den Text und schlägt Titel, Datum und Ordner vor.
+            </p>
+            <button
+              type="button"
+              id="dash-empty-open-inbox"
+              onClick={onOpenInbox}
+              className="mt-4 inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold shadow-xs transition-colors cursor-pointer"
+            >
+              Zum Eingang <ArrowRight className="w-3.5 h-3.5" />
+            </button>
+          </div>
         ) : (
           <ul id="dash-recent" className="divide-y divide-zinc-100 dark:divide-zinc-800 rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 overflow-hidden">
             {recent.map((doc) => (

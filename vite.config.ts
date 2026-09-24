@@ -1,6 +1,5 @@
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
-import path from 'path';
 import {defineConfig} from 'vite';
 
 export default defineConfig(() => {
@@ -8,7 +7,9 @@ export default defineConfig(() => {
     plugins: [react(), tailwindcss()],
     resolve: {
       alias: {
-        '@': path.resolve(__dirname, '.'),
+        // import.meta.dirname statt __dirname: Neuere Vite-Versionen brechen beim Laden der
+        // Konfiguration sonst ab, und der Container installiert bewusst ohne Lockfile (Regel 1).
+        '@': import.meta.dirname,
       },
     },
     server: {

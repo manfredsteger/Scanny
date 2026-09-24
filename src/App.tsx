@@ -550,6 +550,7 @@ export default function App() {
             onSelectDocument={(doc) => setSelectedDoc(doc)}
             onUploadFiles={handleUploadFiles}
             onRetryDocument={handleRetryDocument}
+            onDeleteDocument={handleDeleteDocument}
             onMergeDocuments={(docs) => setMergeCandidates(docs)}
             isUploading={isUploading}
           />

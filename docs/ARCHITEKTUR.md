@@ -70,7 +70,7 @@ Alle Pfade werden über `process.cwd()`-relative Defaults aufgelöst und beim Se
 
 ## 4. Wichtige Regeln ("Nicht verändern")
 
-Entwickler müssen die folgenden 8 Regeln zwingend beachten:
+Entwickler müssen die folgenden 9 Regeln zwingend beachten:
 
 1. **Dockerfile**: Im Builder-Stage immer `COPY package.json ./` verwenden (NICHT `package*.json`). Die lokale `package-lock.json` stammt von macOS und bricht native Rollup-/Binary-Pakete unter Linux (`npm/cli#4828`).
 2. **PORT nie hartkodieren**: Immer `process.env.PORT` mit Fallback auslesen (`parseInt(process.env.PORT || '3000', 10)`).
@@ -80,6 +80,14 @@ Entwickler müssen die folgenden 8 Regeln zwingend beachten:
 6. **Alles lokal**: Keine Cloud-Dienste, keine Cloud-KI (z. B. Gemini, OpenAI), keine externen Web-APIs mit Dokumenteninhalten und keine CDN-Abhängigkeiten zur Laufzeit. Private Steuerbelege bleiben zu 100% auf dem Rechner des Nutzers.
 7. **Dateisystem zuerst, dann DB**: Bei Datei- und Ordneroperationen (Erstellen, Umbenennen, Verschieben, Löschen) wird immer zuerst die Dateisystem-Operation ausgeführt und validiert. Erst bei fehlerfreiem Erfolg wird der entsprechende Datenbank-Eintrag aktualisiert oder angelegt. Dateisystem-Fehler niemals verschlucken, sondern mit aussagekräftiger Meldung als HTTP-Fehlerstatus (409 oder 500) beantworten.
 8. **Dokumentenecken (corners) und Drehung**: Die gespeicherten Ecken (`corners`) beziehen sich IMMER auf das bereits gedrehte Arbeitsbild (nach Anwendung von `rotation`). Ändert sich die Drehung (`rotation`), werden gespeicherte `corners` in der Datenbank zurückgesetzt (`NULL`, automatische Neuerkennung), sofern nicht explizit neue Ecken im selben Aufruf übergeben werden.
+9. **`.dockerignore` niemals entfernen**: Ohne sie kopiert `COPY . .` im Dockerfile die lokalen
+   `node_modules` vom Mac (darwin-Binaries) in den Linux-Container und überschreibt die dort frisch
+   installierten Pakete. Weil der Builder bewusst ohne Lockfile installiert (Regel 1), können die
+   Versionen auseinanderlaufen – native Module wie `rolldown`, `sharp` oder `better-sqlite3` passen
+   dann nicht mehr zusammen und der Build bricht mit schwer deutbaren Fehlern ab (aufgetreten
+   2026-09-24: `rolldown` 1.2.10 im Container gegen 1.2.9 vom Mac). Die Datei hält außerdem `data/`,
+   `scanny/` und `.env` aus dem Image (Regel 4). Aus demselben Grund nutzt `vite.config.ts`
+   `import.meta.dirname` statt `__dirname`.
 
 ---
 
@@ -187,3 +195,34 @@ Entwickler müssen die folgenden 8 Regeln zwingend beachten:
   Zusammenfügen und Trennen gegen eine echte SQLite-DB mit echten PDFs ab. Die Testumgebung setzt
   `DATA_DIR`/`ARCHIVE_DIR` auf ein temporäres Verzeichnis, **bevor** `db.ts` dynamisch importiert
   wird – die Pfade werden beim Laden des Moduls aufgelöst.
+
+---
+
+## 8. Export & Feinschliff (Schritt 8)
+
+- **Endpunkt**: `GET /api/folders/:id/export?format=zip|csv|pdf&from=&to=&ids=`
+  (`server/routes/export.ts`). `from`/`to` grenzen auf das **Belegdatum** ein – Belege ohne
+  `doc_date` fallen bei gesetztem Zeitraum heraus und stehen sonst am Ende. Exportiert werden nur
+  Belege mit `status = 'filed'` und `deleted_at IS NULL`.
+- **ZIP**: mit `archiver` **gestreamt**, nie komplett im Speicher. Ab Version 8 ist `archiver`
+  ESM-only und hat keine aufrufbare Standardausgabe mehr – deshalb `new ZipArchive(...)` statt
+  `archiver('zip')`. Dateinamen wie im Archiv, bei Namensgleichheit im ZIP durchnummeriert; die
+  CSV-Übersicht liegt als `Uebersicht.csv` immer bei. Bricht der Download ab (`res` schließt),
+  wird der Archivierer über `abort()` gestoppt.
+- **CSV**: `Datum;Typ;Titel;Absender;Betrag;Seiten;Dateiname`, Semikolon-getrennt, CRLF,
+  **UTF-8 mit BOM** (sonst zerlegt Excel die Umlaute), deutsches Zahlenformat ohne Währungszeichen,
+  Summenzeile am Ende. Felder mit `;` oder `"` werden gequotet.
+- **Sammel-PDF**: `pdf-lib`. Vorneweg die Übersicht (Tabelle + Summe, bei vielen Belegen über
+  mehrere Seiten), danach alle Beleg-PDFs in derselben Reihenfolge. Fehlende PDFs werden
+  übersprungen, nicht als Fehler gewertet. **Helvetica kann nur WinAnsi** – Text läuft deshalb
+  durch `toWinAnsi()`, sonst wirft pdf-lib bei typografischen Anführungszeichen oder Gedankenstrichen.
+- **Frontend**: `src/components/ExportDialog.tsx`, geöffnet über „Exportieren…" in der
+  Ordneransicht. Die Ordneransicht hat dafür eine Mehrfachauswahl (Tabelle und Kacheln). Der Dialog
+  rechnet die Auswahl mit derselben Logik wie der Server nach und sperrt den Knopf bei 0 Belegen –
+  so kann der Server nie eine 404-JSON-Antwort als Datei ausliefern. Heruntergeladen wird über
+  einen Link-Klick je Format (kein Blob), damit der Browser den Datenstrom direkt auf die Platte
+  schreibt; bei mehreren Formaten mit kurzer Pause dazwischen.
+- **Tastenkürzel im Eingang** (`InboxView`): Pfeiltasten blättern, `Enter` öffnet, `A` legt in den
+  vorgeschlagenen Ordner ab, `Entf` verschiebt in den Papierkorb. `Esc` schließt den Detail-Drawer
+  (`DocumentDetailDrawer`, nur wenn kein Dialog darüber liegt). Alle Handler ignorieren Eingaben in
+  Feldern und greifen nicht, solange ein `[role="dialog"]` offen ist.
