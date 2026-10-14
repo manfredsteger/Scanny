@@ -421,4 +421,24 @@ function migrate(db: Database.Database): void {
     });
     runMigration8();
   }
+
+  if (currentVersion < 9) {
+    // Migration 9: Art des Belegs (image | pdf | text) – steuert Pipeline-Zweig und Oberfläche
+    const runMigration9 = db.transaction(() => {
+      const colNames = new Set((db.prepare(`PRAGMA table_info(documents)`).all() as { name: string }[]).map((c) => c.name));
+      if (!colNames.has('kind')) {
+        db.exec(`ALTER TABLE documents ADD COLUMN kind TEXT NOT NULL DEFAULT 'image';`);
+      }
+      db.exec(`
+        UPDATE documents SET kind = CASE
+          WHEN lower(original_name) LIKE '%.pdf' OR original_path IS NULL THEN 'pdf'
+          WHEN lower(original_name) LIKE '%.txt' OR lower(original_name) LIKE '%.md'
+               OR lower(original_name) LIKE '%.markdown' THEN 'text'
+          ELSE 'image'
+        END;
+        PRAGMA user_version = 9;
+      `);
+    });
+    runMigration9();
+  }
 }

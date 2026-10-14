@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import { paths } from '../db.js';
 import { ingestFile } from './ingest.js';
 
-const ALLOWED_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.heic', '.heif', '.pdf']);
+import { ALLOWED_EXTENSIONS } from './fileTypes.js';
 const loggedIgnoredFiles = new Set<string>();
 const activeIngestFiles = new Set<string>();
 

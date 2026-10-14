@@ -5,6 +5,7 @@ import exifr from 'exifr';
 import { getDb, paths } from '../db.js';
 import { documentQueue } from './queue.js';
 import { archiveDirForFolder, groupLabel, originalSuffix, reserveBase } from './files.js';
+import { decodeText, kindForName, MAX_TEXT_BYTES } from './fileTypes.js';
 
 export interface IngestOptions {
   sourcePath: string;
@@ -132,11 +133,13 @@ export async function ingestFile(options: IngestOptions): Promise<number> {
       original_name,
       title,
       color_mode,
+      kind,
       detected,
       created_at,
       updated_at
     ) VALUES (
       'queued',
+      ?,
       ?,
       ?,
       ?,
@@ -153,7 +156,8 @@ export async function ingestFile(options: IngestOptions): Promise<number> {
     options.importBatch || null,
     rawOriginalName,
     initialTitle,
-    initialColorMode
+    initialColorMode,
+    kindForName(rawOriginalName || ext)
   );
   const docId = Number(info.lastInsertRowid);
 
@@ -170,10 +174,25 @@ export async function ingestFile(options: IngestOptions): Promise<number> {
   );
   const destPath = path.join(inboxDir, base + originalSuffix(rawOriginalName || ext));
 
+  // Textdateien: sha256 über die EMPFANGENEN Bytes (Duplikaterkennung), gespeichert wird UTF-8
+  const kind = kindForName(rawOriginalName || ext);
+  let fileSha256: string | null = null;
   try {
-    moveOrCopySync(options.sourcePath, destPath);
+    if (kind === 'text') {
+      const bytes = fs.readFileSync(options.sourcePath);
+      if (bytes.length > MAX_TEXT_BYTES) {
+        throw new Error(`Textdatei ist zu groß (${Math.round(bytes.length / 1024)} KB, höchstens ${MAX_TEXT_BYTES / 1024} KB).`);
+      }
+      fileSha256 = crypto.createHash('sha256').update(bytes).digest('hex');
+      const { text, encoding } = decodeText(bytes);
+      fs.writeFileSync(destPath, text, 'utf8');
+      fs.unlinkSync(options.sourcePath);
+      if (encoding !== 'utf-8') console.log(`[Ingest] Dokument ${docId}: Textdatei aus ${encoding} nach UTF-8 umgewandelt.`);
+    } else {
+      moveOrCopySync(options.sourcePath, destPath);
+    }
   } catch (err: any) {
-    const errorMsg = `Verschieben in den Eingang fehlgeschlagen: ${err?.message || err}`;
+    const errorMsg = `Übernehmen in den Eingang fehlgeschlagen: ${err?.message || err}`;
     console.error(`[Ingest] ${errorMsg}`);
     db.prepare(`
       UPDATE documents
@@ -186,10 +205,9 @@ export async function ingestFile(options: IngestOptions): Promise<number> {
     return docId;
   }
 
-  // 4. SHA-256 Hash berechnen
-  let fileSha256: string | null = null;
+  // 4. SHA-256 Hash berechnen (Textdateien haben ihn schon)
   try {
-    fileSha256 = computeSha256(destPath);
+    if (!fileSha256) fileSha256 = computeSha256(destPath);
   } catch (hashErr) {
     console.warn(`[Ingest] Konnte SHA-256 für Dokument ${docId} nicht berechnen:`, hashErr);
   }

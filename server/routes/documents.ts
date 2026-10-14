@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import multer from 'multer';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import sharp from 'sharp';
 import { getDb, paths } from '../db.js';
@@ -9,6 +10,7 @@ import { documentQueue } from '../pipeline/queue.js';
 import { ensureWorkImage, runScanPy } from '../pipeline/processDocument.js';
 import { moveOrCopySync } from '../pipeline/ocr.js';
 import { applyPlanToDb, executePlan, GroupPlan, isBusy, planGroup, revertPlan } from '../pipeline/files.js';
+import { ALLOWED_EXTENSIONS, decodeText, MAX_TEXT_BYTES } from '../pipeline/fileTypes.js';
 import { mergeDocuments, splitDocument } from '../pipeline/merge.js';
 import { purgeDocument, restoreDocument, TRASH_RETENTION_DAYS, trashDocument } from '../pipeline/trash.js';
 import { buildFtsQuery, SNIPPET_END, SNIPPET_START } from '../search.js';
@@ -30,7 +32,6 @@ const storage = multer.diskStorage({
   },
 });
 
-const ALLOWED_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.heic', '.heif', '.pdf']);
 
 function fixOriginalName(name: string): string {
   try {
@@ -90,10 +91,9 @@ documentsRouter.post('/upload', handleFileUpload, async (req: Request, res: Resp
             fs.unlinkSync(file.path);
           }
         } catch {}
-        rejected.push({
-          name: fixedName,
-          reason: `Dateiendung "${ext}" nicht unterstützt. Erlaubt: JPG, PNG, HEIC, PDF.`,
-        });
+        const reason = `Dateiendung "${ext || '(keine)'}" nicht unterstützt. Erlaubt: JPG, PNG, HEIC, PDF, TXT, MD.`;
+        console.log(`[Upload] Abgelehnt: "${fixedName}" – ${reason}`);
+        rejected.push({ name: fixedName, reason });
         continue;
       }
 
@@ -359,6 +359,8 @@ documentsRouter.get('/documents/:id/original', (req: Request, res: Response) => 
     else if (ext === '.png') contentType = 'image/png';
     else if (['.heic', '.heif'].includes(ext)) contentType = 'image/heic';
     else if (ext === '.webp') contentType = 'image/webp';
+    else if (ext === '.md' || ext === '.markdown') contentType = 'text/markdown; charset=utf-8';
+    else if (ext === '.txt') contentType = 'text/plain; charset=utf-8';
 
     const filename = doc.original_name || 'dokument';
     const encodedFilename = encodeURIComponent(filename).replace(/['()]/g, escape).replace(/\*/g, '%2A');
@@ -585,20 +587,84 @@ documentsRouter.post('/documents/:id/detect', async (req: Request, res: Response
   }
 });
 
+// GET /api/documents/:id/source -> Quelltext einer Textdatei (zum Bearbeiten)
+documentsRouter.get('/documents/:id/source', (req: Request, res: Response) => {
+  const id = parseInt(req.params.id, 10);
+  if (isNaN(id)) return res.status(400).json({ error: 'Ungültige Dokument-ID.' });
+  const doc = getDb().prepare('SELECT kind, original_path, original_name FROM documents WHERE id = ?').get(id) as any;
+  if (!doc) return res.status(404).json({ error: 'Dokument nicht gefunden.' });
+  if (doc.kind !== 'text') return res.status(409).json({ error: 'Dieser Beleg ist keine Textdatei.' });
+  if (!doc.original_path || !fs.existsSync(doc.original_path)) {
+    return res.status(404).json({ error: 'Die Textdatei wurde nicht gefunden.' });
+  }
+  const { text } = decodeText(fs.readFileSync(doc.original_path));
+  res.json({
+    text,
+    name: path.basename(doc.original_path),
+    original_name: doc.original_name,
+    markdown: /\.(md|markdown)$/i.test(doc.original_path),
+  });
+});
+
+// PUT /api/documents/:id/source { text } -> Textdatei speichern und PDF neu erzeugen
+documentsRouter.put('/documents/:id/source', (req: Request, res: Response) => {
+  const id = parseInt(req.params.id, 10);
+  if (isNaN(id)) return res.status(400).json({ error: 'Ungültige Dokument-ID.' });
+  const text = req.body?.text;
+  if (typeof text !== 'string') return res.status(400).json({ error: 'Feld "text" fehlt.' });
+  const bytes = Buffer.from(text.replace(/\r\n?/g, '\n'), 'utf8');
+  if (bytes.length > MAX_TEXT_BYTES) {
+    return res.status(413).json({ error: `Text ist zu lang (höchstens ${MAX_TEXT_BYTES / 1024} KB).` });
+  }
+
+  const db = getDb();
+  const doc = db.prepare('SELECT * FROM documents WHERE id = ?').get(id) as any;
+  if (!doc) return res.status(404).json({ error: 'Dokument nicht gefunden.' });
+  if (doc.kind !== 'text') return res.status(409).json({ error: 'Dieser Beleg ist keine Textdatei.' });
+  if (doc.deleted_at) return res.status(409).json({ error: 'Der Beleg liegt im Papierkorb.' });
+  if (isBusy(doc)) return res.status(409).json({ error: 'Der Beleg wird gerade verarbeitet – bitte kurz warten.' });
+  if (!doc.original_path || !fs.existsSync(doc.original_path)) {
+    return res.status(404).json({ error: 'Die Textdatei wurde nicht gefunden.' });
+  }
+
+  // Datei zuerst (Regel 7), atomar über eine temporäre Datei daneben
+  const tmp = `${doc.original_path}.speichern-${Date.now()}`;
+  try {
+    fs.writeFileSync(tmp, bytes);
+    fs.renameSync(tmp, doc.original_path);
+  } catch (err: any) {
+    try {
+      if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
+    } catch {}
+    return res.status(500).json({ error: `Textdatei konnte nicht gespeichert werden: ${err?.message || err}` });
+  }
+
+  // Erkennung wie beim ersten Mal (Überschrift → Titel), von Hand gesetzte Felder schützt user_edited
+  db.prepare(`
+    UPDATE documents
+    SET sha256 = ?, status = 'queued', error = NULL, extraction = NULL,
+        updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+    WHERE id = ?
+  `).run(crypto.createHash('sha256').update(bytes).digest('hex'), id);
+  documentQueue.enqueue(id);
+  console.log(`[Quelltext] Dokument ${id}: Textdatei gespeichert (${bytes.length} Bytes), PDF wird neu erzeugt.`);
+  res.json({ ok: true, id, status: 'queued' });
+});
+
 // POST /api/documents/:id/reprocess { corners?, rotation?, color_mode? } -> neu aufbereiten
 documentsRouter.post('/documents/:id/reprocess', (req: Request, res: Response) => {
   const id = parseInt(req.params.id, 10);
   if (isNaN(id)) return res.status(400).json({ error: 'Ungültige Dokument-ID.' });
 
-  const doc = getDb().prepare('SELECT original_path FROM documents WHERE id = ?').get(id) as any;
+  const doc = getDb().prepare('SELECT original_path, kind FROM documents WHERE id = ?').get(id) as any;
   if (!doc) return res.status(404).json({ error: 'Dokument nicht gefunden.' });
   if (!doc.original_path) {
     return res
       .status(409)
       .json({ error: 'Für dieses Dokument gibt es kein Original (z. B. zusammengefügte Belege).' });
   }
-  if ((doc.original_path || '').toLowerCase().endsWith('.pdf')) {
-    return res.status(409).json({ error: 'PDF-Dokumente können nicht neu aufbereitet werden.' });
+  if (doc.kind !== 'image') {
+    return res.status(409).json({ error: 'Nur Fotos und Bilder können neu aufbereitet werden.' });
   }
 
   const { corners, rotation, color_mode } = req.body || {};
@@ -814,7 +880,7 @@ export function patchDocument(id: number, input: any): PatchResult {
       rotationChanged ||
       finalCorners !== existing.corners;
 
-    if (needsReprocessing && existing.original_path && !existing.original_path.toLowerCase().endsWith('.pdf')) {
+    if (needsReprocessing && existing.original_path && existing.kind === 'image') {
       db.prepare(`
         UPDATE documents
         SET status = 'queued',

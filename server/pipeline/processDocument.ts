@@ -6,7 +6,8 @@ import sharp from 'sharp';
 import { fileURLToPath } from 'node:url';
 import { getDb, paths } from '../db.js';
 import { moveOrCopySync, runOcrPipeline } from './ocr.js';
-import { applyPlanToDb, executePlan, planGroup, revertPlan } from './files.js';
+import { applyPlanToDb, executePlan, placeNewPdf, planGroup, revertPlan } from './files.js';
+import { IMAGE_EXTENSIONS, isMarkdownName, TEXT_EXTENSIONS, titleFromText } from './fileTypes.js';
 import { detectDocument } from './extract.js';
 import { buildTitle } from './title.js';
 
@@ -16,21 +17,22 @@ const execFileAsync = promisify(execFile);
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// scan.py-Pfad auflösen: Bevorzugt server/pipeline/scan.py relativ zum Arbeitsverzeichnis (cwd),
-// mit Fallback auf den Pfad relativ zu __dirname
-function resolveScanPyPath(): string {
-  const cwdPath = path.resolve(process.cwd(), 'server/pipeline/scan.py');
+// Pfad eines Pipeline-Skripts auflösen: Bevorzugt server/pipeline/<name> relativ zum Arbeitsverzeichnis
+// (cwd), mit Fallback auf den Pfad relativ zu __dirname (server/dist liegt im Container daneben)
+function resolvePipelineScript(name: string): string {
+  const cwdPath = path.resolve(process.cwd(), 'server/pipeline', name);
   if (fs.existsSync(cwdPath)) {
     return cwdPath;
   }
-  const dirnamePath = path.resolve(__dirname, 'scan.py');
+  const dirnamePath = path.resolve(__dirname, name);
   if (fs.existsSync(dirnamePath)) {
     return dirnamePath;
   }
   return cwdPath;
 }
 
-export const SCAN_PY_PATH = resolveScanPyPath();
+export const SCAN_PY_PATH = resolvePipelineScript('scan.py');
+export const TEXTPDF_PY_PATH = resolvePipelineScript('textpdf.py');
 
 export interface ScanResult {
   ok: boolean;
@@ -115,7 +117,7 @@ function parseUserEdited(raw: string | null | undefined): Set<string> {
  * in documents.extraction und benennt danach das Archiv-PDF passend um.
  * Synchron: zwischen Lesen und Schreiben kann kein Request dazwischenfunken.
  */
-export function applyDetection(id: number, layout: string | null): void {
+export function applyDetection(id: number, layout: string | null, textTitle: string | null = null): void {
   const db = getDb();
   const doc = db
     .prepare(
@@ -162,7 +164,10 @@ export function applyDetection(id: number, layout: string | null): void {
   if (mayFill('sender', doc.sender) && det.sender) updates.sender = det.sender;
   if (mayFill('doc_date', doc.doc_date) && det.date) updates.doc_date = det.date;
   if (mayFill('amount_cents', doc.amount_cents) && det.amountCents !== null) updates.amount_cents = det.amountCents;
-  if (mayFill('title', doc.title)) {
+  if (mayFill('title', doc.title) && textTitle && ((updates.doc_type as string | undefined) ?? doc.doc_type) === 'sonstiges') {
+    // Textdatei ohne erkannten Belegtyp: ihre erste Überschrift sagt mehr als "Dokument <Absender>"
+    updates.title = textTitle;
+  } else if (mayFill('title', doc.title)) {
     // Titel aus den endgültigen Werten bauen (vom Nutzer gesetzte Typen/Absender zählen mit)
     const title = buildTitle(
       (updates.doc_type as string | undefined) ?? doc.doc_type,
@@ -232,9 +237,9 @@ export function suggestFolderIdForDate(isoDate: string): number | null {
   return row ? row.id : null;
 }
 
-function runDetectionSafely(id: number, layout: string | null): void {
+function runDetectionSafely(id: number, layout: string | null, textTitle: string | null = null): void {
   try {
-    applyDetection(id, layout);
+    applyDetection(id, layout, textTitle);
   } catch (err) {
     console.warn(`[Erkennung] Fehler bei Dokument ${id} (Dokument bleibt ohne Vorschläge):`, err);
   }
@@ -252,7 +257,8 @@ export async function ensureWorkImage(id: number): Promise<string | null> {
   if (!doc?.original_path || !fs.existsSync(doc.original_path)) return null;
 
   const ext = path.extname(doc.original_path).toLowerCase();
-  if (ext === '.pdf') return null;
+  // Nur Bilder haben ein Arbeitsbild (PDFs und Textdateien nicht)
+  if (!IMAGE_EXTENSIONS.has(ext)) return null;
 
   if (!fs.existsSync(paths.workDir)) fs.mkdirSync(paths.workDir, { recursive: true });
   const workJpg = path.join(paths.workDir, `${id}.jpg`);
@@ -325,6 +331,69 @@ export async function processDocument(id: number): Promise<void> {
 
     const outputPng = path.join(paths.workDir, `${id}.png`);
     const targetThumb = path.join(paths.thumbsDir, `${id}.webp`);
+
+    // ==========================================
+    // C) Textdatei (.txt / .md) → gesetztes PDF, Quelltext angehängt und bearbeitbar
+    // ==========================================
+    if (TEXT_EXTENSIONS.has(ext)) {
+      console.log(`[Pipeline] Dokument ${id} ist eine Textdatei. Setze PDF...`);
+      const sourceText = fs.readFileSync(origPath, 'utf8');
+      const markdown = isMarkdownName(origPath);
+      const workPdf = path.join(paths.workDir, `${id}.pdf`);
+
+      const { stdout } = await execFileAsync(
+        'python3',
+        [TEXTPDF_PY_PATH, origPath, workPdf, markdown ? 'md' : 'txt', doc.original_name || path.basename(origPath)],
+        { timeout: 60000, maxBuffer: 5 * 1024 * 1024 }
+      );
+      const rendered = JSON.parse(stdout.trim().split('\n').pop() || '{}') as { ok?: boolean; pages?: number; error?: string; mode?: string };
+      if (!rendered.ok || !fs.existsSync(workPdf)) {
+        throw new Error(`Textdatei konnte nicht als PDF gesetzt werden: ${rendered.error || 'unbekannter Fehler'}`);
+      }
+
+      // Seite 1 als Vorschaubild
+      try {
+        await execFileAsync('gs', ['-q', '-sDEVICE=png16m', '-dFirstPage=1', '-dLastPage=1', '-r110', '-o', outputPng, workPdf], {
+          timeout: 30000,
+        });
+        if (fs.existsSync(outputPng)) {
+          await sharp(outputPng).resize({ width: 400, withoutEnlargement: true }).webp({ quality: 80 }).toFile(targetThumb);
+        }
+      } catch (gsErr) {
+        console.warn(`[Pipeline] Vorschaubild für Textdatei ${id} fehlgeschlagen:`, gsErr);
+      }
+
+      const placed = placeNewPdf(id, workPdf);
+      const ocrText = sourceText.trim() || null;
+
+      db.prepare(`
+        UPDATE documents
+        SET status = CASE WHEN folder_id IS NOT NULL THEN 'filed' ELSE 'inbox' END,
+            thumb_path = CASE WHEN ? = 1 THEN ? ELSE thumb_path END,
+            pdf_path = ?,
+            ocr_text = ?,
+            page_count = ?,
+            detected = NULL,
+            title = CASE WHEN title IS NULL OR TRIM(title) = '' THEN ? ELSE title END,
+            error = NULL,
+            updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+        WHERE id = ?
+      `).run(
+        fs.existsSync(targetThumb) ? 1 : 0,
+        targetThumb,
+        placed.pdfPath,
+        ocrText,
+        rendered.pages || 1,
+        baseTitle,
+        id
+      );
+
+      runDetectionSafely(id, null, ocrText ? titleFromText(ocrText, markdown) : null);
+      console.log(
+        `[Pipeline] Textdatei ${id} als PDF gesetzt (${rendered.pages} Seite(n), Modus ${rendered.mode}).`
+      );
+      return;
+    }
 
     // ==========================================
     // A) PDF-Eingang (Datei war schon PDF)

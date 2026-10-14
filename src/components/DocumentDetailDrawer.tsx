@@ -1,3 +1,4 @@
+import { SourceEditor } from './SourceEditor';
 import React, { useState, useEffect } from 'react';
 import {
   X,
@@ -19,6 +20,7 @@ import {
   Scissors,
   Plus,
   Undo2,
+  FileCode,
 } from 'lucide-react';
 import {
   Folder,
@@ -27,6 +29,7 @@ import {
   DocumentPageInfo,
   HighlightField,
   hasEditableImage,
+  isTextDocument,
   pdfPreviewUrl,
   TRASH_RETENTION_DAYS,
   highlightSpan,
@@ -68,7 +71,7 @@ export function DocumentDetailDrawer({
   const [isDeleting, setIsDeleting] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
   const [previewMode, setPreviewMode] = useState<'processed' | 'original'>('processed');
-  const [activeTab, setActiveTab] = useState<'preview' | 'pdf' | 'text'>('preview');
+  const [activeTab, setActiveTab] = useState<'preview' | 'pdf' | 'text' | 'source'>('preview');
   const [copied, setCopied] = useState(false);
   const [hoveredField, setHoveredField] = useState<HighlightField>(null);
   const [isCornerEditorOpen, setIsCornerEditorOpen] = useState(false);
@@ -95,7 +98,14 @@ export function DocumentDetailDrawer({
     setLocalDoc(document);
     if (document) {
       const nurPdf = !hasEditableImage(document);
-      setActiveTab((prev) => (nurPdf ? 'pdf' : prev === 'pdf' ? 'preview' : prev));
+      const textDoc = isTextDocument(document);
+      setActiveTab((prev) =>
+        textDoc
+          ? prev === 'pdf' || prev === 'text' || prev === 'source' ? prev : 'source'
+          : prev === 'source'
+          ? nurPdf ? 'pdf' : 'preview'
+          : nurPdf ? 'pdf' : prev === 'pdf' ? 'preview' : prev
+      );
       let userEditedArr: string[] = [];
       if (document.user_edited) {
         try {
@@ -573,6 +583,21 @@ export function DocumentDetailDrawer({
                       <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" title="Text vorhanden" />
                     )}
                   </button>
+                  {isTextDocument(localDoc) && (
+                    <button
+                      type="button"
+                      id="drawer-tab-source"
+                      onClick={() => setActiveTab('source')}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer flex items-center gap-1.5 ${
+                        activeTab === 'source'
+                          ? 'bg-white dark:bg-zinc-800 text-zinc-900 dark:text-white shadow-xs font-semibold'
+                          : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white'
+                      }`}
+                    >
+                      <FileCode className="w-3.5 h-3.5" />
+                      <span>Quelltext</span>
+                    </button>
+                  )}
                 </div>
 
                 {localDoc.page_count !== null && localDoc.page_count !== undefined && localDoc.page_count > 1 && (
@@ -778,6 +803,14 @@ export function DocumentDetailDrawer({
               )}
 
               {/* Tab 3: Text (erkannter OCR-Text, monospace & kopierbar) */}
+              {activeTab === 'source' && isTextDocument(localDoc) && (
+                <SourceEditor
+                  docId={localDoc.id}
+                  busy={localDoc.status === 'queued' || localDoc.status === 'processing'}
+                  onSaved={() => setLocalDoc((prev) => (prev ? { ...prev, status: 'queued' } : prev))}
+                />
+              )}
+
               {activeTab === 'text' && (
                 <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 p-3.5 flex flex-col relative min-h-[260px] max-h-[380px] space-y-2.5">
                   <div className="flex items-center justify-between pb-2 border-b border-zinc-100 dark:border-zinc-800">

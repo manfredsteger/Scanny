@@ -269,3 +269,29 @@ Archiv/<Ordner | _Eingang | _Papierkorb>/
 - **FALLE:** `fs.cpSync` scheitert unter Docker Desktop auf macOS-Bind-Mounts (virtiofs) mit EACCES –
   immer `copyDirSync()` aus `files.ts` verwenden. SQLite-WAL auf dem Bind-Mount ist getestet (parallel
   lesen/schreiben, `kill -9` mitten im Schreiben → Integrität ok).
+
+
+---
+
+## 10. Textdateien (.txt / .md) → PDF (2026-10-14)
+
+- **Annahme:** gemeinsame Endungsliste `server/pipeline/fileTypes.ts` (Upload-Ordner UND Web-Upload),
+  max. 1 MB. Abgelehnte Uploads werden jetzt auch im Server-Log protokolliert (`[Upload] Abgelehnt: …`).
+- **Kodierung:** `decodeText()` – BOM (UTF-8/UTF-16) → striktes UTF-8 → Windows-1252; gespeichert wird
+  immer UTF-8 mit `\n`. `sha256` über die EMPFANGENEN Bytes (Duplikaterkennung).
+- **`documents.kind`** (Migration 9): `image | pdf | text`. Frontend entscheidet über `hasEditableImage()`,
+  `isTextDocument()`, `pdfPreviewUrl()` in `src/types.ts`; `/reprocess`, `/work-meta`, `ensureWorkImage()`
+  nur für `image`.
+- **Renderer** `server/pipeline/textpdf.py` (reportlab + python-markdown + DejaVu, zusammen ~5 MB;
+  WeasyPrint wäre +762 MB gewesen): Markdown inkl. Tabellen, verschachtelter Listen, ☐/☑, Code-Blöcken;
+  `.txt` zeilentreu. `normalize_lists()` bringt GitHub-Stil-Listen (2/3 Leerzeichen, keine Leerzeile)
+  in die Form, die python-markdown verlangt. **Alles lokal:** Roh-HTML abgeschaltet (`html_block`/`html`
+  deregistriert), Bilder nie geladen („[Bild: …]“), Links nur als Text. Quelldatei per pikepdf als
+  PDF-Anhang. Fehlt ein Schriftschnitt, wird auf den normalen ausgewichen; Markdown-Fehler → Text-Fallback.
+- **Pipeline-Zweig C** in `processDocument.ts`: Renderer → Vorschaubild → `placeNewPdf()` → `ocr_text` =
+  Quelltext → Erkennung. Titel: bei Typ „sonstiges“ die erste Überschrift (`titleFromText()`), sonst wie gehabt.
+- **Bearbeiten:** `GET/PUT /api/documents/:id/source`. PUT schreibt die Datei atomar (Regel 7), setzt
+  `extraction = NULL` (Erkennung wie beim ersten Mal, `user_edited` schützt Handeingaben) und reiht neu ein.
+  UI: Tab „Quelltext“ im Detail-Drawer (`SourceEditor.tsx`, ⌘S), Abzeichen „Textdatei“ + Filter
+  „Alle · Scans · Textdateien“ im Eingang.
+- **FALLE:** `fonts-dejavu-core` enthält KEINE Kursivschnitte → `fonts-dejavu-extra` im Dockerfile.

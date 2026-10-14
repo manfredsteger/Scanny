@@ -54,6 +54,16 @@ lokal in Docker auf dem Mac. Private Steuerbelege verlassen den Rechner nicht.
 
 ---
 
+## Textdateien (.txt, .md)
+
+Notizen und Markdown-Dateien kannst du genauso reinziehen wie Fotos. Scanny setzt daraus ein sauberes
+PDF (Überschriften, Tabellen, Listen, Code) und legt die Textdatei mit gleichem Namen daneben. Im Eingang
+tragen sie das Abzeichen **„Textdatei“**, oben lässt sich nach **Alle · Scans · Textdateien** filtern.
+In der Detailansicht unter **„Quelltext“** bearbeiten und **„Speichern & PDF neu erzeugen“** – fertig.
+Bilder oder Links aus dem Internet lädt Scanny dabei nie nach.
+
+---
+
 ## Schnellstart mit Docker
 
 ### 1. Einrichtung (`make setup`)

@@ -228,12 +228,12 @@ export async function mergeDocuments(ids: number[]): Promise<MergeResult> {
             status, source, import_batch, folder_id, title, doc_date, amount_cents, sender, doc_type,
             user_edited, original_name, original_path, pdf_path, thumb_path, page_count, color_mode,
             corners, rotation, ocr_text, extraction, detected, file_date, sha256, error,
-            created_at, updated_at
+            kind, created_at, updated_at
           ) VALUES (
             ?, ?, ?, ?, ?, ?, ?, ?, ?,
             ?, ?, NULL, ?, NULL, ?, ?,
             NULL, 0, ?, ?, NULL, ?, NULL, NULL,
-            ?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+            'pdf', ?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
           )
         `)
         .run(

@@ -145,8 +145,13 @@ export function SettingsView({ paths, health }: SettingsViewProps) {
     },
     {
       key: 'tesseract',
-      name: 'Tesseract OCR (deu + eng)',
+      name: 'Tesseract OCR (deutsch)',
       description: 'Lokale Texterkennungs-Engine mit deutschem Sprachmodell',
+    },
+    {
+      key: 'textpdf',
+      name: 'Textdateien → PDF',
+      description: 'Setzt .txt- und Markdown-Dateien lokal als PDF (reportlab, DejaVu-Schrift)',
     },
   ];
 

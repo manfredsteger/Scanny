@@ -34,6 +34,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-opencv \
     python3-numpy \
     python3-pdfminer \
+    python3-reportlab \
+    python3-markdown \
+    fonts-dejavu-core \
+    fonts-dejavu-extra \
     libheif-examples \
     && rm -rf /var/lib/apt/lists/*
 

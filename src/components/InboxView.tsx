@@ -18,6 +18,7 @@ import {
   Layers,
   Trash2,
   Download,
+  FileCode,
   X,
 } from 'lucide-react';
 import { Folder, ScannyDocument, SystemPaths, formatDocumentType, suggestFolderId } from '../types';
@@ -57,8 +58,28 @@ export function InboxView({
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [focusedId, setFocusedId] = useState<number | null>(null);
 
-  // Nur fertig aufbereitete Belege sind auswählbar / ablegbar
-  const selectableDocs = documents.filter((d) => d.status === 'inbox');
+  // Filter "Alle · Scans · Textdateien" (merkt sich die Wahl im Browser, rein als Komfort)
+  const [kindFilter, setKindFilter] = useState<'all' | 'scans' | 'text'>(() => {
+    try {
+      const saved = window.localStorage.getItem('scanny.inbox.kindFilter');
+      return saved === 'scans' || saved === 'text' ? saved : 'all';
+    } catch {
+      return 'all';
+    }
+  });
+  const chooseKindFilter = (value: 'all' | 'scans' | 'text') => {
+    setKindFilter(value);
+    try {
+      window.localStorage.setItem('scanny.inbox.kindFilter', value);
+    } catch {}
+  };
+  const textCount = documents.filter((d) => d.kind === 'text').length;
+  const visibleDocs = documents.filter((d) =>
+    kindFilter === 'all' ? true : kindFilter === 'text' ? d.kind === 'text' : d.kind !== 'text'
+  );
+
+  // Nur fertig aufbereitete Belege sind auswählbar / ablegbar (im aktuellen Filter)
+  const selectableDocs = visibleDocs.filter((d) => d.status === 'inbox');
   const selectedList = selectableDocs.filter((d) => selectedIds.has(d.id));
 
   // Auswahl bereinigen, wenn Belege den Eingang verlassen
@@ -68,7 +89,7 @@ export function InboxView({
       const next = new Set([...prev].filter((id) => valid.has(id)));
       return next.size === prev.size ? prev : next;
     });
-  }, [documents]);
+  }, [documents, kindFilter]);
 
   const toggleSelect = (doc: ScannyDocument, shiftKey: boolean) => {
     setSelectedIds((prev) => {
@@ -297,7 +318,7 @@ export function InboxView({
         ref={fileInputRef}
         type="file"
         multiple
-        accept=".jpg,.jpeg,.png,.heic,.heif,.pdf"
+        accept=".jpg,.jpeg,.png,.heic,.heif,.pdf,.txt,.md,.markdown"
         className="hidden"
         onChange={handleFileInputChange}
       />
@@ -392,7 +413,7 @@ export function InboxView({
             {isUploading ? 'Dateien werden importiert…' : 'Dateien hierher ziehen oder klicken'}
           </h3>
           <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1 leading-relaxed">
-            iPhone-Fotos (HEIC, JPG), PNG oder PDF-Dokumente
+            iPhone-Fotos (HEIC, JPG), PNG, PDF-Dokumente oder Textdateien (TXT, MD)
           </p>
           {displayWatchDir && (
             <div className="mt-2 text-[11px] text-zinc-400 dark:text-zinc-500 flex items-center gap-1">
@@ -518,8 +539,42 @@ export function InboxView({
           </p>
         </div>
       ) : (
+        <>
+        {(textCount > 0 || kindFilter !== 'all') && (
+          <div id="inbox-kind-filter" className="flex items-center gap-1.5 text-xs">
+            {(
+              [
+                ['all', 'Alle', documents.length],
+                ['scans', 'Scans', documents.length - textCount],
+                ['text', 'Textdateien', textCount],
+              ] as const
+            ).map(([value, label, count]) => (
+              <button
+                key={value}
+                type="button"
+                id={`inbox-filter-${value}`}
+                onClick={() => chooseKindFilter(value)}
+                className={`px-3 py-1.5 rounded-full border font-medium transition-colors cursor-pointer ${
+                  kindFilter === value
+                    ? 'bg-zinc-900 dark:bg-white text-white dark:text-zinc-900 border-zinc-900 dark:border-white'
+                    : 'border-zinc-200 dark:border-zinc-700 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800'
+                }`}
+              >
+                {label} <span className="opacity-60 font-mono">{count}</span>
+              </button>
+            ))}
+          </div>
+        )}
+        {visibleDocs.length === 0 && (
+          <p className="text-sm text-zinc-500 dark:text-zinc-400 py-8 text-center">
+            Keine Belege in diesem Filter.{' '}
+            <button type="button" className="text-blue-600 dark:text-blue-400 underline cursor-pointer" onClick={() => chooseKindFilter('all')}>
+              Alle zeigen
+            </button>
+          </p>
+        )}
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-          {documents.map((doc) => {
+          {visibleDocs.map((doc) => {
             const isProcessing = doc.status === 'processing' || doc.status === 'queued';
             const isError = doc.status === 'error';
             const formattedAmount = formatAmount(doc.amount_cents);
@@ -678,6 +733,18 @@ export function InboxView({
                     </div>
                   )}
 
+                  {/* Textdatei-Abzeichen: PDF wurde aus einer .txt/.md gesetzt, Quelltext bearbeitbar */}
+                  {doc.kind === 'text' && (
+                    <div
+                      id={`doc-tile-text-${doc.id}`}
+                      className="absolute bottom-2.5 left-2.5 bg-violet-600/90 backdrop-blur-xs text-white text-[10px] font-semibold px-2 py-0.5 rounded-lg shadow-xs flex items-center gap-1"
+                      title="Aus einer Textdatei erzeugt – Quelltext in der Detailansicht bearbeitbar"
+                    >
+                      <FileCode className="w-3 h-3 shrink-0" />
+                      <span>Textdatei</span>
+                    </div>
+                  )}
+
                   {/* Ränder nicht erkannt Badge */}
                   {(doc.detected === 0 || doc.detected === false) && (
                     <div
@@ -770,6 +837,7 @@ export function InboxView({
             );
           })}
         </div>
+        </>
       )}
     </div>
   );

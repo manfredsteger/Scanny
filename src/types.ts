@@ -199,6 +199,8 @@ export interface ScannyDocument {
   deleted_at?: string | null;
   /** Anzahl der Quellbelege, aus denen dieses Dokument zusammengefügt wurde (0 = nicht zusammengefügt). */
   merged_pages?: number;
+  /** Art des Belegs: Foto/Bild, PDF oder Textdatei (.txt/.md, als PDF gesetzt, Quelltext bearbeitbar) */
+  kind?: 'image' | 'pdf' | 'text';
   created_at: string;
   updated_at: string;
 }
@@ -222,15 +224,21 @@ export const TRASH_RETENTION_DAYS = 30;
  * kein Scanbild und kein Arbeitsbild – nur das erzeugte PDF.
  */
 export function hasEditableImage(
-  doc: Pick<ScannyDocument, 'original_path' | 'original_name'> | null | undefined
+  doc: Pick<ScannyDocument, 'original_path' | 'original_name' | 'kind'> | null | undefined
 ): boolean {
   if (!doc?.original_path) return false;
-  return !doc.original_name?.toLowerCase().endsWith('.pdf');
+  if (doc.kind) return doc.kind === 'image';
+  return /\.(jpe?g|png|heic|heif)$/i.test(doc.original_name || '');
 }
 
-/** Quelle für die eingebettete PDF-Vorschau: Originaldatei, sonst das erzeugte Archiv-PDF. */
-export function pdfPreviewUrl(doc: Pick<ScannyDocument, 'id' | 'original_path'>): string {
-  return doc.original_path ? `/api/documents/${doc.id}/original` : `/api/documents/${doc.id}/pdf`;
+/** Textdatei (.txt/.md), deren Quelltext sich bearbeiten und neu als PDF setzen lässt. */
+export function isTextDocument(doc: Pick<ScannyDocument, 'kind' | 'original_path'> | null | undefined): boolean {
+  return Boolean(doc?.original_path) && doc?.kind === 'text';
+}
+
+/** Quelle für die eingebettete PDF-Vorschau: Original-PDF, sonst das erzeugte Archiv-PDF. */
+export function pdfPreviewUrl(doc: Pick<ScannyDocument, 'id' | 'original_path' | 'kind'>): string {
+  return doc.original_path && doc.kind !== 'text' ? `/api/documents/${doc.id}/original` : `/api/documents/${doc.id}/pdf`;
 }
 
 /** Ergebnis der automatischen Erkennung (documents.extraction, JSON). Spans = [start, end] im ocr_text. */

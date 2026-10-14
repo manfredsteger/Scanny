@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { execSync } from 'node:child_process';
 import fs from 'node:fs';
-import { SCAN_PY_PATH } from '../pipeline/processDocument.js';
+import { SCAN_PY_PATH, TEXTPDF_PY_PATH } from '../pipeline/processDocument.js';
 
 export const healthRouter = Router();
 
@@ -35,6 +35,16 @@ function checkTesseractWithDeu(): boolean {
   }
 }
 
+function checkTextPdf(): boolean {
+  try {
+    if (!fs.existsSync(TEXTPDF_PY_PATH)) return false;
+    execSync('python3 -c "import reportlab, markdown, pikepdf"', { stdio: 'ignore' });
+    return fs.existsSync('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf');
+  } catch {
+    return false;
+  }
+}
+
 function checkScanPy(): boolean {
   try {
     return fs.existsSync(SCAN_PY_PATH);
@@ -59,6 +69,7 @@ function computeToolsStatus() {
     ocrmypdf: isOcrmypdf,
     tesseract: isTesseract,
     'scan.py': isScanPy,
+    textpdf: checkTextPdf(),
   };
 }
 

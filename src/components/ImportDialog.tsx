@@ -656,8 +656,13 @@ export function ImportDialog({
                         Noch kein Text erkannt – die Texterkennung läuft nach der Aufbereitung.
                       </p>
                     )
+                  ) : currentDoc.kind === 'text' && !currentDoc.pdf_path ? (
+                    <p className="text-xs text-zinc-500 dark:text-zinc-400 flex items-center gap-2">
+                      <Loader2 className="w-4 h-4 animate-spin" /> Textdatei wird als PDF gesetzt…
+                    </p>
                   ) : isDocPdf(currentDoc) ? (
                     <iframe
+                      key={`${currentDoc.id}-${currentDoc.updated_at}`}
                       src={pdfPreviewUrl(currentDoc)}
                       title="PDF Vorschau"
                       className="w-full h-full rounded-xl border border-zinc-300 dark:border-zinc-800 bg-white"
