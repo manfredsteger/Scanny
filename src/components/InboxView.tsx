@@ -16,6 +16,7 @@ import {
   Check,
   FolderInput,
   Layers,
+  Trash2,
   X,
 } from 'lucide-react';
 import { Folder, ScannyDocument, SystemPaths, formatDocumentType, suggestFolderId } from '../types';
@@ -111,6 +112,30 @@ export function InboxView({
       await onRefresh();
     } catch (err: any) {
       flash(err?.message || 'Ablegen fehlgeschlagen.');
+    } finally {
+      setBusy(false);
+    }
+  };
+  // Auswahl in den Papierkorb (30 Tage wiederherstellbar, daher ohne Rückfrage wie die Entf-Taste)
+  const trashDocuments = async (ids: number[]) => {
+    setBusy(true);
+    let moved = 0;
+    const failed: string[] = [];
+    try {
+      for (const id of ids) {
+        const res = await fetch(`/api/documents/${id}`, { method: 'DELETE' });
+        if (res.ok) {
+          moved++;
+        } else {
+          const data = await res.json().catch(() => null);
+          const doc = documents.find((d) => d.id === id);
+          failed.push(`»${doc?.title || doc?.original_name || id}«: ${data?.error || 'Löschen fehlgeschlagen'}`);
+        }
+      }
+      const msg = `${moved} ${moved === 1 ? 'Beleg liegt' : 'Belege liegen'} jetzt im Papierkorb.`;
+      flash(failed.length > 0 ? `${msg} Nicht gelöscht: ${failed.join('; ')}` : msg);
+      setSelectedIds(new Set());
+      await onRefresh();
     } finally {
       setBusy(false);
     }
@@ -398,6 +423,17 @@ export function InboxView({
               >
                 <Layers className="w-3.5 h-3.5" />
                 Zu einem Dokument zusammenfügen
+              </button>
+              <button
+                type="button"
+                id="inbox-bulk-trash-btn"
+                disabled={busy}
+                onClick={() => trashDocuments(selectedList.map((d) => d.id))}
+                className="px-3 py-1.5 rounded-lg border border-red-300 dark:border-red-900 bg-white dark:bg-zinc-900 text-red-700 dark:text-red-400 font-semibold flex items-center gap-1.5 hover:bg-red-50 dark:hover:bg-red-950/50 transition-colors disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed"
+                title="Die gewählten Belege in den Papierkorb legen (30 Tage wiederherstellbar)"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                In den Papierkorb
               </button>
               <button
                 type="button"
