@@ -79,6 +79,19 @@ function escapeXml(unsafe: string): string {
 }
 
 
+/**
+ * Pfad aus URL-Teilen sicher auflösen: nur einfache Datei-/Ordnernamen (kein "..", kein "/"),
+ * Ergebnis muss innerhalb von baseDir liegen. Express dekodiert %2F in Parametern zu "/" –
+ * ohne diese Prüfung ließ sich mit "..%2F..%2Fscanny.db" jede Datei im Container lesen.
+ */
+function safeJoin(baseDir: string, ...segments: string[]): string | null {
+  for (const segment of segments) {
+    if (!segment || segment !== path.basename(segment) || segment === '.' || segment === '..') return null;
+  }
+  const resolved = path.resolve(baseDir, ...segments);
+  return resolved.startsWith(path.resolve(baseDir) + path.sep) ? resolved : null;
+}
+
 interface SessionPageMeta {
   id: string;
   sourceFileName: string;
@@ -306,9 +319,9 @@ toolsRouter.post(
 // -------------------------------------------------------------
 toolsRouter.get('/tools/thumb/:sessionId/:filename', (req: Request, res: Response) => {
   const { sessionId, filename } = req.params;
-  const filePath = path.join(toolsSessionsDir, sessionId, filename);
+  const filePath = safeJoin(toolsSessionsDir, sessionId, filename);
 
-  if (fs.existsSync(filePath)) {
+  if (filePath && fs.existsSync(filePath)) {
     res.setHeader('Content-Type', 'image/jpeg');
     res.setHeader('Cache-Control', 'public, max-age=3600');
     return fs.createReadStream(filePath).pipe(res);
@@ -340,7 +353,8 @@ toolsRouter.post('/tools/assemble', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Keine Seiten zum Zusammenfügen angegeben.' });
     }
 
-    const sessionPath = path.join(toolsSessionsDir, sessionId);
+    const sessionPath = safeJoin(toolsSessionsDir, String(sessionId));
+    if (!sessionPath) return res.status(400).json({ error: 'Ungültige Sitzung.' });
     const manifestPath = path.join(sessionPath, 'manifest.json');
 
     if (!fs.existsSync(manifestPath)) {
@@ -635,7 +649,8 @@ toolsRouter.post('/tools/export-single-page', async (req: Request, res: Response
       return res.status(400).json({ error: 'sessionId und pageKey sind erforderlich.' });
     }
 
-    const sessionPath = path.join(toolsSessionsDir, sessionId);
+    const sessionPath = safeJoin(toolsSessionsDir, String(sessionId));
+    if (!sessionPath) return res.status(400).json({ error: 'Ungültige Sitzung.' });
     const manifestPath = path.join(sessionPath, 'manifest.json');
 
     if (!fs.existsSync(manifestPath)) {
@@ -932,10 +947,10 @@ toolsRouter.post(
 // -------------------------------------------------------------
 toolsRouter.get('/tools/download-tmp/:filename', (req: Request, res: Response) => {
   const { filename } = req.params;
-  const filePath = path.join(paths.tmpDir, filename);
+  const filePath = safeJoin(paths.tmpDir, filename);
   const downloadName = (req.query.name as string) || filename;
 
-  if (fs.existsSync(filePath)) {
+  if (filePath && fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(downloadName)}"`);
     return fs.createReadStream(filePath).pipe(res);
