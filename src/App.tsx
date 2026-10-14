@@ -11,6 +11,7 @@ import { ImportDialog } from './components/ImportDialog';
 import { DocumentDetailDrawer } from './components/DocumentDetailDrawer';
 import { TrashView } from './components/TrashView';
 import { MergeDialog } from './components/MergeDialog';
+import { collectDroppedFiles } from './dropFiles';
 import { ThemeToggle } from './components/ThemeToggle';
 
 import {
@@ -45,6 +46,9 @@ export default function App() {
     filed: 0,
   });
   const [activeView, setActiveView] = useState<ActiveView>({ type: 'dashboard' });
+  // Für den globalen Drop-Handler (registriert sich nur einmal je Upload-Funktion)
+  const activeViewRef = useRef(activeView);
+  activeViewRef.current = activeView;
   const [searchQuery, setSearchQuery] = useState('');
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [paths, setPaths] = useState<SystemPaths | null>(null);
@@ -305,7 +309,7 @@ export default function App() {
     const handleDragEnter = (e: DragEvent) => {
       e.preventDefault();
       dragCounter.current += 1;
-      if (e.dataTransfer?.types?.includes('Files')) {
+      if (e.dataTransfer?.types?.includes('Files') && activeViewRef.current.type !== 'tools') {
         setIsWindowDragging(true);
       }
     };
@@ -327,9 +331,13 @@ export default function App() {
       e.preventDefault();
       dragCounter.current = 0;
       setIsWindowDragging(false);
-      if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
-        await handleUploadFiles(e.dataTransfer.files);
-      }
+      // In den Tools gehören abgelegte Dateien in die Werkbank – NICHT zusätzlich in den Eingang
+      if (activeViewRef.current.type === 'tools') return;
+      if (!e.dataTransfer) return;
+      // Ordner rekursiv auflösen (dataTransfer.files enthält bei Ordnern nur den Ordner selbst →
+      // "Failed to fetch"). Muss vor dem ersten await laufen, siehe dropFiles.ts.
+      const files = await collectDroppedFiles(e.dataTransfer);
+      if (files.length > 0) await handleUploadFiles(files);
     };
 
     window.addEventListener('dragenter', handleDragEnter);
