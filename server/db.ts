@@ -41,6 +41,7 @@ scanny.db      Datenbank: Titel, Datum, Betrag, Absender, Ordner, erkannter Text
                Zusammen mit dem Ordner "Archiv" ist das ALLES, was gesichert werden muss.
 Cache/         Vorschaubilder und Arbeitsdateien. Darf gelöscht werden,
                Scanny erzeugt alles bei Bedarf neu.
+Logs/          Protokolle der letzten 14 Tage (für die Fehlersuche).
 
 Die eigentlichen Belege liegen im Ordner "Archiv" daneben – je Beleg mit gleichem Namen:
   2026-10-03 Rechnung Bäckerei Müller.pdf    erzeugtes, durchsuchbares PDF

@@ -10,7 +10,7 @@ import { documentQueue } from '../pipeline/queue.js';
 import { ensureWorkImage, runScanPy } from '../pipeline/processDocument.js';
 import { moveOrCopySync } from '../pipeline/ocr.js';
 import { applyPlanToDb, executePlan, GroupPlan, isBusy, planGroup, revertPlan } from '../pipeline/files.js';
-import { ALLOWED_EXTENSIONS, decodeText, MAX_TEXT_BYTES } from '../pipeline/fileTypes.js';
+import { ALLOWED_EXTENSIONS, decodeText, MAX_TEXT_BYTES, textRenderMode } from '../pipeline/fileTypes.js';
 import { mergeDocuments, splitDocument } from '../pipeline/merge.js';
 import { purgeDocument, restoreDocument, TRASH_RETENTION_DAYS, trashDocument } from '../pipeline/trash.js';
 import { buildFtsQuery, SNIPPET_END, SNIPPET_START } from '../search.js';
@@ -65,8 +65,10 @@ documentsRouter.post('/upload', handleFileUpload, async (req: Request, res: Resp
   try {
     const files = req.files as Express.Multer.File[];
     if (!files || files.length === 0) {
+      console.log('[Upload] Anfrage ohne Dateien abgelehnt.');
       return res.status(400).json({ error: 'Keine Dateien übermittelt.' });
     }
+    console.log(`[Upload] ${files.length} Datei(en): ${files.map((f) => fixOriginalName(f.originalname)).join(', ')}`);
 
     const batchId = `batch_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const ids: number[] = [];
@@ -603,7 +605,7 @@ documentsRouter.get('/documents/:id/source', (req: Request, res: Response) => {
     text,
     name: path.basename(doc.original_path),
     original_name: doc.original_name,
-    markdown: /\.(md|markdown)$/i.test(doc.original_path),
+    markdown: textRenderMode(doc.original_path, text) !== 'txt',
   });
 });
 

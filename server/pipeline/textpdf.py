@@ -2,7 +2,8 @@
 """
 Setzt eine Textdatei (.txt oder Markdown) als A4-PDF und hängt die Quelldatei an.
 
-Aufruf:  python3 textpdf.py <quelle.utf8> <ziel.pdf> <md|txt> <anzeigename>
+Aufruf:  python3 textpdf.py <quelle.utf8> <ziel.pdf> <md|md-txt|txt> <anzeigename>
+         md-txt = Markdown aus einer .txt-Datei: einzelne Zeilenumbrüche bleiben erhalten (nl2br)
 Ausgabe: JSON auf stdout, z. B. {"ok": true, "pages": 2, "mode": "md"}
 
 Alles lokal: Roh-HTML im Markdown wird NICHT ausgewertet (erscheint als Text), Bilder werden
@@ -255,8 +256,9 @@ def code_block(text):
     return box
 
 
-def markdown_flow(source, width):
-    md = markdown.Markdown(extensions=["tables", "fenced_code", "sane_lists"], output_format="xhtml")
+def markdown_flow(source, width, keep_line_breaks=False):
+    extensions = ["tables", "fenced_code", "sane_lists"] + (["nl2br"] if keep_line_breaks else [])
+    md = markdown.Markdown(extensions=extensions, output_format="xhtml")
     # Kein Roh-HTML: sonst kämen <img src="http://…"> & Co. ungefiltert durch
     md.preprocessors.deregister("html_block")
     md.inlinePatterns.deregister("html")
@@ -302,7 +304,7 @@ def main():
 
     used = mode
     try:
-        flow = markdown_flow(source, width) if mode == "md" else text_flow(source)
+        flow = markdown_flow(source, width, keep_line_breaks=(mode == "md-txt")) if mode in ("md", "md-txt") else text_flow(source)
     except Exception as err:  # Markdown nicht sauber lesbar → schlicht als Text setzen statt scheitern
         sys.stderr.write(f"Markdown-Fallback: {err}\n")
         flow, used = text_flow(source), "txt-fallback"

@@ -2,6 +2,7 @@ import express from 'express';
 import path from 'node:path';
 import { ensureDirectories, getDb, paths } from './db.js';
 import { migrateLegacyStorage } from './storageMigration.js';
+import { startFileLogging } from './logFile.js';
 import { healthRouter } from './routes/health.js';
 import { foldersRouter } from './routes/folders.js';
 import { settingsRouter } from './routes/settings.js';
@@ -21,6 +22,7 @@ async function startServer() {
 
   // Verzeichnisse und Datenbank initialisieren
   ensureDirectories();
+  startFileLogging();
   // Einmaliger Umzug aus dem alten ./data-Ordner (muss vor dem ersten getDb() laufen)
   migrateLegacyStorage();
   getDb();

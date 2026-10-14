@@ -80,3 +80,35 @@ export function titleFromText(text: string, markdown: boolean): string | null {
   if (!clean) return null;
   return clean.length > 80 ? clean.slice(0, 80).replace(/\s+\S*$/, '').trim() : clean;
 }
+
+/**
+ * Erkennt Markdown in Textdateien (z. B. .txt mit "# Überschrift", "- Liste", "**fett**", Tabellen).
+ * Nötig sind mindestens zwei UNTERSCHIEDLICHE Merkmale oder mehrere Überschriften – eine einzelne
+ * Zeile mit "-" oder "*" macht eine Notiz noch nicht zu Markdown.
+ */
+export function looksLikeMarkdown(text: string): boolean {
+  const lines = text.split('\n');
+  const count = (re: RegExp) => lines.filter((l) => re.test(l)).length;
+  const headings = count(/^#{1,6}\s+\S/);
+  const markers = [
+    headings > 0,
+    count(/^\s*[-*+]\s+\S/) >= 2,
+    count(/^\s*\d+[.)]\s+\S/) >= 2,
+    /\*\*[^*\n]+\*\*|__[^_\n]+__/.test(text),
+    count(/^\s*\|.*\|\s*$/) >= 2 && /^\s*\|?\s*:?-{3,}/m.test(text),
+    /^```/m.test(text),
+    count(/^>\s?\S/) >= 1,
+    /\[[^\]\n]+\]\([^)\s]+\)/.test(text),
+    count(/^\s*[-*+]\s+\[[ xX]\]/) >= 1,
+  ].filter(Boolean).length;
+  return headings >= 2 || markers >= 2;
+}
+
+/**
+ * Satzmodus für textpdf.py: "md" für Markdown-Dateien, "md-txt" für erkanntes Markdown in .txt
+ * (einzelne Zeilenumbrüche bleiben erhalten), sonst "txt".
+ */
+export function textRenderMode(name: string, text: string): 'md' | 'md-txt' | 'txt' {
+  if (isMarkdownName(name)) return 'md';
+  return looksLikeMarkdown(text) ? 'md-txt' : 'txt';
+}

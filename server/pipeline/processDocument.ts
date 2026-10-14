@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { getDb, paths } from '../db.js';
 import { moveOrCopySync, runOcrPipeline } from './ocr.js';
 import { applyPlanToDb, executePlan, placeNewPdf, planGroup, revertPlan } from './files.js';
-import { IMAGE_EXTENSIONS, isMarkdownName, TEXT_EXTENSIONS, titleFromText } from './fileTypes.js';
+import { IMAGE_EXTENSIONS, TEXT_EXTENSIONS, textRenderMode, titleFromText } from './fileTypes.js';
 import { detectDocument } from './extract.js';
 import { buildTitle } from './title.js';
 
@@ -338,12 +338,14 @@ export async function processDocument(id: number): Promise<void> {
     if (TEXT_EXTENSIONS.has(ext)) {
       console.log(`[Pipeline] Dokument ${id} ist eine Textdatei. Setze PDF...`);
       const sourceText = fs.readFileSync(origPath, 'utf8');
-      const markdown = isMarkdownName(origPath);
+      // Markdown auch in .txt erkennen (z. B. "# Überschrift", Listen, **fett**) und dann richtig setzen
+      const mode = textRenderMode(origPath, sourceText);
+      const markdown = mode !== 'txt';
       const workPdf = path.join(paths.workDir, `${id}.pdf`);
 
       const { stdout } = await execFileAsync(
         'python3',
-        [TEXTPDF_PY_PATH, origPath, workPdf, markdown ? 'md' : 'txt', doc.original_name || path.basename(origPath)],
+        [TEXTPDF_PY_PATH, origPath, workPdf, mode, doc.original_name || path.basename(origPath)],
         { timeout: 60000, maxBuffer: 5 * 1024 * 1024 }
       );
       const rendered = JSON.parse(stdout.trim().split('\n').pop() || '{}') as { ok?: boolean; pages?: number; error?: string; mode?: string };

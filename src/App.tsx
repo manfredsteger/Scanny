@@ -238,10 +238,20 @@ export default function App() {
           formData.append('files', f);
         });
 
-        const res = await fetch('/api/upload', {
-          method: 'POST',
-          body: formData,
-        });
+        // Ist der Server gerade nicht erreichbar (z. B. Neustart nach einem Update), nicht sofort
+        // aufgeben: nach 2, 4 und 8 Sekunden erneut versuchen – sonst kommt "Failed to fetch"
+        let res: Response | null = null;
+        for (let attempt = 0; ; attempt++) {
+          try {
+            res = await fetch('/api/upload', { method: 'POST', body: formData });
+            break;
+          } catch (netErr) {
+            if (attempt >= 3) {
+              throw new Error('Scanny ist gerade nicht erreichbar – bitte in einem Moment erneut versuchen.');
+            }
+            await new Promise((r) => setTimeout(r, 2000 * 2 ** attempt));
+          }
+        }
 
         const result = await res.json().catch(() => null);
 

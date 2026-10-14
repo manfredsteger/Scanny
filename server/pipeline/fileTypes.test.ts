@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ALLOWED_EXTENSIONS, decodeText, kindForName, titleFromText } from './fileTypes';
+import { ALLOWED_EXTENSIONS, decodeText, kindForName, looksLikeMarkdown, textRenderMode, titleFromText } from './fileTypes';
 
 describe('decodeText', () => {
   it('liest UTF-8 mit Umlauten', () => {
@@ -61,5 +61,28 @@ describe('Dateitypen', () => {
     expect(kindForName('Liste.MD')).toBe('text');
     expect(kindForName('scan.pdf')).toBe('pdf');
     expect(kindForName('IMG_1.HEIC')).toBe('image');
+  });
+});
+
+describe('Markdown in Textdateien erkennen', () => {
+  it('erkennt eine .txt im Markdown-Stil (Überschriften + eingerückte Zeilen)', () => {
+    const text = '# Vereinsfest – Druckanleitung\nSamstag, 3. Mai\n\n## 00 Spickzettel\nAblauf.pdf - 2 Seiten\n  Druck: A4 hoch\n\n## 01 Einladungen\nEinladung.pdf - 8 Seiten\n';
+    expect(looksLikeMarkdown(text)).toBe(true);
+    expect(textRenderMode('ANLEITUNG.txt', text)).toBe('md-txt');
+  });
+
+  it('erkennt Liste + Fettdruck', () => {
+    expect(looksLikeMarkdown('Einkauf\n\n- Papier\n- Kleber\n\n**Wichtig:** bis Freitag')).toBe(true);
+  });
+
+  it('hält normale Notizen NICHT für Markdown', () => {
+    expect(looksLikeMarkdown('Anruf bei Müller - Rückruf morgen\nTermin 14:00 Uhr\n')).toBe(false);
+    expect(looksLikeMarkdown('Kontostand: 1.234,56 €\n* nur ein Sternchen\n')).toBe(false);
+    expect(looksLikeMarkdown('# einzelne Raute als Kommentar\nwert=3\n')).toBe(false);
+    expect(textRenderMode('notiz.txt', 'Hallo Welt')).toBe('txt');
+  });
+
+  it('setzt .md immer als Markdown', () => {
+    expect(textRenderMode('liste.md', 'nur Text')).toBe('md');
   });
 });

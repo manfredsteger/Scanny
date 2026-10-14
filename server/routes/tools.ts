@@ -10,7 +10,7 @@ import { PDFDocument, rgb, degrees, StandardFonts } from 'pdf-lib';
 import { getDb, paths } from '../db.js';
 import { ingestFile } from '../pipeline/ingest.js';
 import { documentQueue } from '../pipeline/queue.js';
-import { decodeText } from '../pipeline/fileTypes.js';
+import { decodeText, textRenderMode } from '../pipeline/fileTypes.js';
 import { extractPdfText } from '../pipeline/ocr.js';
 import { TEXTPDF_PY_PATH } from '../pipeline/processDocument.js';
 
@@ -258,7 +258,7 @@ toolsRouter.post(
             const utf8 = path.join(sessionPath, `src_${fileIdx}.utf8.txt`);
             fs.writeFileSync(utf8, text, 'utf8');
             const pdfPath = path.join(sessionPath, `src_${fileIdx}.pdf`);
-            const mode = ext === '.md' || ext === '.markdown' ? 'md' : 'txt';
+            const mode = textRenderMode(fixedName, text);
             await execFileAsync('python3', [TEXTPDF_PY_PATH, utf8, pdfPath, mode, fixedName], { timeout: 60000 });
             await addPdfPages(pdfPath, fileIdx, fixedName, fileSize);
           } else {

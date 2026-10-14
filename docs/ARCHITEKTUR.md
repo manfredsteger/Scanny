@@ -342,3 +342,16 @@ Archiv/<Ordner | _Eingang | _Papierkorb>/
 - **Globaler Drop-Handler** (`App.tsx`) lädt in der Tools-Ansicht NICHT in den Eingang hoch.
 - **FALLE AI Studio**: 378aa76 entstand auf veraltetem Stand und drehte fce6fb6 (Ordner-Drop) zurück, ohne
   Konflikt beim Rebase. Nach jedem AI-Studio-Push: eigene Commits seit dem letzten Abgleich zeilenweise prüfen.
+
+---
+
+## 13. Markdown in .txt, Logdatei, Upload-Wiederholung (2026-10-14)
+
+- `looksLikeMarkdown()` (fileTypes.ts): mehrere Überschriften ODER zwei unterschiedliche Merkmale (Überschrift,
+  Listen, Nummerierung, **fett**, Tabelle, Codeblock, Zitat, Link, Aufgabenliste). `textRenderMode()` → `md`
+  (.md), `md-txt` (erkanntes Markdown in .txt: python-markdown mit `nl2br`, weil .txt-Schreiber auf einzelne
+  Zeilenumbrüche bauen) oder `txt`. Gilt im Eingang, in der Werkbank und für die Editor-Anzeige.
+- `server/logFile.ts`: Konsole zusätzlich nach `System/Logs/scanny-YYYY-MM-DD.log` (14 Tage). `docker logs`
+  verschwindet bei jedem `make prod` (Container wird neu erstellt) – die Datei nicht. Uploads werden mit
+  Dateinamen protokolliert.
+- Upload im Browser wiederholt Netzfehler nach 2/4/8 s (Server-Neustart ⇒ sonst „Failed to fetch“).
