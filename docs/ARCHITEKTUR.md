@@ -40,7 +40,6 @@ Scanny ist bewusst **kein** schwerfälliger Paperless-Klon: Entwickelt für eine
 │   └── pipeline/           # Pipeline-Skripte (Watcher, Queue, OpenCV/OCR)
 ├── docs/
 │   └── ARCHITEKTUR.md      # Diese Dokumentation
-├── data/                   # [Nicht im Git] ALTER Datenordner (bis 2026-10), nur noch Quelle für den Umzug
 ├── scanny/                 # [Nicht im Git] Der Scanny-Ordner (in Docker: SCANNY_PATH) – ALLES liegt hier
 │   ├── Upload/             # Überwachter Eingangsordner (WATCH_DIR)
 │   ├── Archiv/             # Je Beleg eine Dateigruppe mit sprechendem Namen (ARCHIVE_DIR), siehe §9
@@ -264,8 +263,9 @@ Archiv/<Ordner | _Eingang | _Papierkorb>/
 - **Ordner umbenennen** schreibt per `rewritePathPrefix()` alle Pfade darunter um (auch Originale/Teile).
 - **Umzug** aus dem alten `./data` (`originals/<id>.*`): `storageMigration.ts`, läuft einmal beim Start,
   wenn `LEGACY_DATA_DIR/scanny.db` existiert und `System/scanny.db` noch nicht. Sichert vorher alles nach
-  `System/_Sicherung-vor-Umzug-<Datum>/`, liest die DB per `VACUUM INTO` aus der Sicherungskopie
-  (der alte Ordner ist `:ro` gemountet und bleibt unberührt).
+  `System/_Sicherung-vor-Umzug-<Datum>/`, liest die DB per `VACUUM INTO` aus der Sicherungskopie.
+  Der Umzug ist erledigt (2026-10-14), `./data` und der `legacy-data`-Mount sind entfernt; der Code bleibt
+  für Alt-Installationen (läuft nur mit gesetztem `LEGACY_DATA_DIR`).
 - **FALLE:** `fs.cpSync` scheitert unter Docker Desktop auf macOS-Bind-Mounts (virtiofs) mit EACCES –
   immer `copyDirSync()` aus `files.ts` verwenden. SQLite-WAL auf dem Bind-Mount ist getestet (parallel
   lesen/schreiben, `kill -9` mitten im Schreiben → Integrität ok).

@@ -10,14 +10,11 @@ services:
     volumes:
       # Alles (Archiv, Originale, Datenbank unter System/) liegt im Scanny-Ordner
       - ${SCANNY_PATH:?Bitte SCANNY_PATH in .env setzen}:/app/scanny
-      # Alter Datenordner, nur lesend – für den einmaligen Umzug nach System/ (siehe storageMigration.ts)
-      - ./data:/app/legacy-data:ro
     environment:
       - NODE_ENV=production
       - PORT=3000
       - TZ=Europe/Berlin
       - DATA_DIR=/app/scanny/System
-      - LEGACY_DATA_DIR=/app/legacy-data
       - SCANNY_DIR=/app/scanny
       - WATCH_POLLING=${WATCH_POLLING:-true}
       - SCANNY_HOST_PATH=${SCANNY_PATH}
