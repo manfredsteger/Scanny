@@ -5,7 +5,8 @@ import { promisify } from 'node:util';
 import sharp from 'sharp';
 import { fileURLToPath } from 'node:url';
 import { getDb, paths } from '../db.js';
-import { moveOrCopySync, planArchivePdf, runOcrPipeline } from './ocr.js';
+import { moveOrCopySync, runOcrPipeline } from './ocr.js';
+import { applyPlanToDb, executePlan, planGroup, revertPlan } from './files.js';
 import { detectDocument } from './extract.js';
 import { buildTitle } from './title.js';
 
@@ -118,7 +119,7 @@ export function applyDetection(id: number, layout: string | null): void {
   const db = getDb();
   const doc = db
     .prepare(
-      'SELECT ocr_text, title, doc_type, sender, doc_date, amount_cents, user_edited, folder_id, status, extraction, pdf_path, original_name, created_at FROM documents WHERE id = ?'
+      'SELECT ocr_text, title, doc_type, sender, doc_date, amount_cents, user_edited, folder_id, status, extraction, pdf_path, original_path, original_name, created_at, deleted_at, merged_into FROM documents WHERE id = ?'
     )
     .get(id) as
     | {
@@ -133,8 +134,11 @@ export function applyDetection(id: number, layout: string | null): void {
         status: string;
         extraction: string | null;
         pdf_path: string | null;
+        original_path: string | null;
         original_name: string | null;
         created_at: string | null;
+        deleted_at: string | null;
+        merged_into: number | null;
       }
     | undefined;
   if (!doc) return;
@@ -182,31 +186,30 @@ export function applyDetection(id: number, layout: string | null): void {
     }
   }
 
-  // DATEISYSTEM ZUERST (Regel 7): Archiv-PDF passend zu den neuen Werten verschieben/umbenennen
-  const target = planArchivePdf({
+  // DATEISYSTEM ZUERST (Regel 7): Dateigruppe (PDF + Original) passend zu den neuen Werten umbenennen
+  const plan = planGroup({
+    ...doc,
+    id,
     title: (updates.title as string | undefined) ?? doc.title,
     doc_date: (updates.doc_date as string | undefined) ?? doc.doc_date,
     folder_id: (updates.folder_id as number | undefined) ?? doc.folder_id,
-    pdf_path: doc.pdf_path,
-    original_name: doc.original_name,
-    created_at: doc.created_at,
   });
-  if (target && target !== doc.pdf_path) {
-    moveOrCopySync(doc.pdf_path!, target);
-    updates.pdf_path = target;
-  }
+  executePlan(plan);
 
   const columns = Object.keys(updates);
   const setSql = columns.map((c) => `${c} = ?`).join(', ');
   try {
-    db.prepare(
-      `UPDATE documents SET extraction = ?${setSql ? ', ' + setSql : ''},
-         updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
-       WHERE id = ?`
-    ).run(JSON.stringify(det), ...columns.map((c) => updates[c]), id);
+    db.transaction(() => {
+      db.prepare(
+        `UPDATE documents SET extraction = ?${setSql ? ', ' + setSql : ''},
+           updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+         WHERE id = ?`
+      ).run(JSON.stringify(det), ...columns.map((c) => updates[c]), id);
+      applyPlanToDb(plan);
+    })();
   } catch (dbErr) {
-    // DB-Update gescheitert: Datei zurück an den alten Ort, damit DB und Archiv übereinstimmen
-    if (updates.pdf_path && doc.pdf_path) moveOrCopySync(updates.pdf_path as string, doc.pdf_path);
+    // DB-Update gescheitert: Dateien zurück an den alten Ort, damit DB und Archiv übereinstimmen
+    revertPlan(plan);
     throw dbErr;
   }
 

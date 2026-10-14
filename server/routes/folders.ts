@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
+import { rewritePathPrefix } from '../pipeline/files.js';
 import { getDb, paths, validateFolderName } from '../db.js';
 
 export const foldersRouter = Router();
@@ -327,15 +328,13 @@ foldersRouter.put('/folders/:id', (req: Request, res: Response) => {
       WHERE id = ?
     `).run(finalName, finalKind, finalYear, finalColor, id);
 
-    // Falls der Ordnername geändert wurde, die Pfade der PDFs der enthaltenen Dokumente anpassen
+    // Falls der Ordnername geändert wurde, die Pfade ALLER Dateien darunter anpassen
+    // (PDFs, Originale und Teile zusammengefügter Dokumente)
     if (finalName !== existing.name) {
-      const oldPrefix = path.join(paths.archiveDir, existing.name) + path.sep;
-      const newPrefix = path.join(paths.archiveDir, finalName) + path.sep;
-      db.prepare(`
-        UPDATE documents
-        SET pdf_path = ? || substr(pdf_path, ?)
-        WHERE folder_id = ? AND substr(pdf_path, 1, ?) = ?
-      `).run(newPrefix, oldPrefix.length + 1, id, oldPrefix.length, oldPrefix);
+      rewritePathPrefix(
+        path.join(paths.archiveDir, existing.name) + path.sep,
+        path.join(paths.archiveDir, finalName) + path.sep
+      );
     }
 
     // Zählung der abgelegten Dokumente abrufen

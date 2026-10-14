@@ -2,36 +2,68 @@ import Database from 'better-sqlite3';
 import fs from 'node:fs';
 import path from 'node:path';
 
-// Basisverzeichnisse auflösen
-const dataDir = path.resolve(process.cwd(), process.env.DATA_DIR || './data');
+// Basisverzeichnisse auflösen.
+// Alles liegt unter SCANNY_DIR, damit ein Backup dieses einen Ordners vollständig ist:
+//   Upload/   – Eingang zum Reinwerfen
+//   Archiv/   – je Beleg eine Dateigruppe mit sprechendem Namen (PDF + Original, siehe pipeline/files.ts)
+//   System/   – Datenbank und Cache (Vorschaubilder/Arbeitsdateien, jederzeit neu erzeugbar)
 const scannyDir = path.resolve(process.cwd(), process.env.SCANNY_DIR || './scanny');
+const dataDir = path.resolve(process.cwd(), process.env.DATA_DIR || path.join(scannyDir, 'System'));
 const watchDir = path.resolve(process.env.WATCH_DIR || path.join(scannyDir, 'Upload'));
 const archiveDir = path.resolve(process.env.ARCHIVE_DIR || path.join(scannyDir, 'Archiv'));
-const originalsDir = path.join(dataDir, 'originals');
-const thumbsDir = path.join(dataDir, 'thumbs');
-const tmpDir = path.join(dataDir, 'tmp');
-const workDir = path.join(dataDir, 'work');
+const cacheDir = path.join(dataDir, 'Cache');
+const thumbsDir = path.join(cacheDir, 'Vorschau');
+const workDir = path.join(cacheDir, 'Arbeit');
+const tmpDir = path.join(cacheDir, 'Temp');
 const dbPath = path.join(dataDir, 'scanny.db');
+// Alter Datenordner (bis 2026-10: ./data mit originals/<id>.*); nur für den einmaligen Umzug
+const legacyDataDir = process.env.LEGACY_DATA_DIR ? path.resolve(process.env.LEGACY_DATA_DIR) : null;
 
 export const paths = {
   dataDir,
   scannyDir,
   watchDir,
   archiveDir,
-  originalsDir,
+  cacheDir,
   thumbsDir,
   tmpDir,
   workDir,
   dbPath,
+  legacyDataDir,
 };
+
+const README_TEXT = `Scanny – Systemordner
+=====================
+
+Hier liegt, was Scanny intern braucht. Bitte nicht von Hand ändern.
+
+scanny.db      Datenbank: Titel, Datum, Betrag, Absender, Ordner, erkannter Text.
+               Zusammen mit dem Ordner "Archiv" ist das ALLES, was gesichert werden muss.
+Cache/         Vorschaubilder und Arbeitsdateien. Darf gelöscht werden,
+               Scanny erzeugt alles bei Bedarf neu.
+
+Die eigentlichen Belege liegen im Ordner "Archiv" daneben – je Beleg mit gleichem Namen:
+  2026-10-03 Rechnung Bäckerei Müller.pdf    erzeugtes, durchsuchbares PDF
+  2026-10-03 Rechnung Bäckerei Müller.heic   Original (Foto, Textdatei, ...)
+  ... (Original).pdf                         Original, wenn es schon ein PDF war
+  ... (Originale)/                           Teile eines zusammengefügten Dokuments
+
+Backup: den kompletten Scanny-Ordner sichern (am besten bei gestopptem Scanny: make stop).
+`;
 
 // Verzeichnisse beim Import/Start anlegen, falls sie noch nicht existieren
 export function ensureDirectories(): void {
-  for (const dir of [dataDir, scannyDir, watchDir, archiveDir, originalsDir, thumbsDir, tmpDir, workDir]) {
+  for (const dir of [dataDir, scannyDir, watchDir, archiveDir, cacheDir, thumbsDir, tmpDir, workDir]) {
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
   }
+  const readme = path.join(dataDir, 'LIESMICH.txt');
+  try {
+    if (!fs.existsSync(readme) || fs.readFileSync(readme, 'utf8') !== README_TEXT) {
+      fs.writeFileSync(readme, README_TEXT);
+    }
+  } catch {}
 }
 
 // Ordnernamen für das Dateisystem säubern (keine Steuerzeichen, keine / \ : * ? " < > |)
@@ -362,5 +394,31 @@ function migrate(db: Database.Database): void {
       `);
     });
     runMigration7();
+  }
+
+  if (currentVersion < 8) {
+    // Migration 8: Teile zusammengefügter Dokumente gehören fest zum Stapel (merged_into),
+    // statt im Papierkorb zu liegen und nach 30 Tagen zu verschwinden.
+    const runMigration8 = db.transaction(() => {
+      const colNames = new Set((db.prepare(`PRAGMA table_info(documents)`).all() as { name: string }[]).map((c) => c.name));
+      if (!colNames.has('merged_into')) {
+        db.exec(`ALTER TABLE documents ADD COLUMN merged_into INTEGER NULL REFERENCES documents(id) ON DELETE SET NULL;`);
+      }
+      // Bestehende Stapel: Quellen, die noch im Papierkorb liegen und zu einem lebenden
+      // zusammengefügten Dokument gehören, werden dessen Teile
+      db.exec(`
+        UPDATE documents SET merged_into = (
+          SELECT p.document_id FROM document_pages p
+          JOIN documents m ON m.id = p.document_id
+          WHERE p.source_document_id = documents.id AND m.deleted_at IS NULL
+          LIMIT 1
+        )
+        WHERE deleted_at IS NOT NULL AND merged_into IS NULL AND id IN (SELECT source_document_id FROM document_pages);
+
+        CREATE INDEX IF NOT EXISTS idx_documents_merged_into ON documents(merged_into);
+        PRAGMA user_version = 8;
+      `);
+    });
+    runMigration8();
   }
 }

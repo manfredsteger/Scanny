@@ -12,7 +12,7 @@ Scanny ist bewusst **kein** schwerfälliger Paperless-Klon: Entwickelt für eine
 - **Backend**: Node 22, Express, TypeScript – läuft im **selben Prozess** wie das Frontend.
   - In Produktion liefert Express das gebaute Frontend aus `/dist` aus und beantwortet `/api/*`.
   - In der Entwicklung wird Vite als Middleware per dynamischem `import('vite')` eingebunden.
-- **Datenbank**: SQLite via `better-sqlite3`, gespeichert unter `$DATA_DIR/scanny.db`.
+- **Datenbank**: SQLite via `better-sqlite3`, gespeichert unter `$DATA_DIR/scanny.db` (Standard `Scanny/System/scanny.db`).
   - WAL-Modus (`PRAGMA journal_mode = WAL`) und Fremdschlüssel aktiviert.
   - Schema-Migrationen per `PRAGMA user_version`.
   - Volltextsuche über SQLite FTS5 (`documents_fts`).
@@ -40,10 +40,11 @@ Scanny ist bewusst **kein** schwerfälliger Paperless-Klon: Entwickelt für eine
 │   └── pipeline/           # Pipeline-Skripte (Watcher, Queue, OpenCV/OCR)
 ├── docs/
 │   └── ARCHITEKTUR.md      # Diese Dokumentation
-├── data/                   # [Nicht im Git] SQLite-DB, Originale, Thumbnails
-├── scanny/                 # [Nicht im Git] Sichtbare Benutzer-Ordner
+├── data/                   # [Nicht im Git] ALTER Datenordner (bis 2026-10), nur noch Quelle für den Umzug
+├── scanny/                 # [Nicht im Git] Der Scanny-Ordner (in Docker: SCANNY_PATH) – ALLES liegt hier
 │   ├── Upload/             # Überwachter Eingangsordner (WATCH_DIR)
-│   └── Archiv/             # Sortierte DIN A4-PDFs (ARCHIVE_DIR)
+│   ├── Archiv/             # Je Beleg eine Dateigruppe mit sprechendem Namen (ARCHIVE_DIR), siehe §9
+│   └── System/             # scanny.db, LIESMICH.txt, Cache/{Vorschau,Arbeit,Temp} (DATA_DIR)
 ├── Dockerfile              # Multi-Stage Dockerfile (node:22-bookworm-slim)
 ├── docker-compose.yml      # Docker Compose Konfiguration
 ├── Makefile                # Komfortable CLI-Befehle (setup, dev, prod, logs)
@@ -59,7 +60,8 @@ Alle Pfade werden über `process.cwd()`-relative Defaults aufgelöst und beim Se
 | Variable | Standardwert | Beschreibung |
 | :--- | :--- | :--- |
 | `PORT` | `3000` | Port des Express-Servers (niemals hartkodiert) |
-| `DATA_DIR` | `./data` | Internes Verzeichnis für `scanny.db`, Originale und Cache |
+| `DATA_DIR` | `$SCANNY_DIR/System` | Datenbank `scanny.db` und Cache (Vorschaubilder, Arbeitsdateien) |
+| `LEGACY_DATA_DIR` | – | Alter `./data`-Ordner, nur für den einmaligen Umzug (`server/storageMigration.ts`) |
 | `SCANNY_DIR` | `./scanny` | Basisordner für den Benutzer auf dem Rechner |
 | `WATCH_DIR` | `$SCANNY_DIR/Upload` | Überwachter Ordner für neue Belege (Eingang) |
 | `ARCHIVE_DIR` | `$SCANNY_DIR/Archiv` | Fertige, im Finder lesbare PDF-Archive |
@@ -121,7 +123,7 @@ Entwickler müssen die folgenden 9 Regeln zwingend beachten:
 - **Koordinatensystem**: Ecken und Vorschau beziehen sich auf das **gedrehte** Arbeitsbild (Regel 8).
   `work-preview` liefert deshalb gedreht aus; `?rotation=` überschreibt die gespeicherte Drehung
   (Vorschau im Editor, bevor gespeichert wird).
-- **Arbeitsbild**: `DATA_DIR/work/<id>.jpg` (EXIF-korrigiert) bleibt als Cache liegen und wird von
+- **Arbeitsbild**: `DATA_DIR/Cache/Arbeit/<id>.jpg` (EXIF-korrigiert) bleibt als Cache liegen und wird von
   `ensureWorkImage(id)` bei Bedarf aus dem Original neu erzeugt (HEIC über `heif-convert`).
 - **Endpunkte**: `GET /api/documents/:id/work-meta` (Maße im Ecken-Koordinatensystem, gespeicherte Ecken),
   `POST /api/documents/:id/detect` (scan.py `--detect-only`, optional mit abweichender Drehung),
@@ -226,3 +228,44 @@ Entwickler müssen die folgenden 9 Regeln zwingend beachten:
   vorgeschlagenen Ordner ab, `Entf` verschiebt in den Papierkorb. `Esc` schließt den Detail-Drawer
   (`DocumentDetailDrawer`, nur wenn kein Dialog darüber liegt). Alle Handler ignorieren Eingaben in
   Feldern und greifen nicht, solange ein `[role="dialog"]` offen ist.
+
+
+---
+
+## 9. Dateihaushalt: Dateigruppen mit sprechenden Namen (2026-10-14)
+
+**Ziel:** Ein Backup des Scanny-Ordners ist vollständig, und im Finder ist ohne Scanny erkennbar, was was ist.
+Keine Dateien, die nur nach Datenbank-IDs heißen – außer im Cache (`System/Cache/`, jederzeit neu erzeugbar).
+
+Jeder Beleg ist eine **Dateigruppe** mit gemeinsamem Grundnamen `YYYY-MM-DD Titel` im selben Ordner:
+
+```text
+Archiv/<Ordner | _Eingang | _Papierkorb>/
+├── 2026-10-03 Rechnung Bäckerei Müller.pdf            erzeugtes PDF          (pdf_path)
+├── 2026-10-03 Rechnung Bäckerei Müller.heic           Original               (original_path)
+├── 2026-10-14 Vertrag.pdf / 2026-10-14 Vertrag (Original).pdf   Original war schon ein PDF
+├── 2026-10-17 Gilde Gesamt.pdf                        zusammengefügtes Dokument
+└── 2026-10-17 Gilde Gesamt (Originale)/               dessen Teile, nummeriert
+    ├── 01 Sticker.pdf / 01 Sticker (Original).pdf
+    └── 02 Urkunden.pdf / 02 Urkunden (Original).pdf
+```
+
+- **Einzige Stelle für Dateibewegungen:** `server/pipeline/files.ts` – `planGroup()` (Zielordner +
+  kollisionsfreier Grundname für ALLE Mitglieder, „(2)" gilt für die ganze Gruppe) → `executePlan()`
+  (verschiebt, rollt bei Fehler zurück) → `applyPlanToDb()` in der Transaktion des Aufrufers
+  (schreibt `pdf_path`, `original_path` und zieht Pfade der Stapel-Teile per Präfix mit). Regel 7 gilt.
+- **Neue Belege:** Ingest legt das Original als `_Eingang/YYYY-MM-DD <Dateiname>.<ext>` ab; nach der
+  Verarbeitung legt `placeNewPdf()` das PDF dazu und benennt die Gruppe nach dem erkannten Titel.
+- **Belege in Arbeit** (`queued`/`processing`) werden nicht bewegt (`isBusy`): PATCH speichert nur die
+  Werte, die Pipeline legt am Ende mit frischen DB-Werten ab; Papierkorb antwortet 409.
+- **Stapel:** Teile haben `merged_into` (Migration 8) + `deleted_at` (bleiben überall ausgeblendet),
+  erscheinen aber NICHT im Papierkorb und werden nicht nach 30 Tagen gelöscht. Endgültiges Löschen des
+  Stapels löscht die Teile mit. Trennen holt sie als normale Gruppen in ihren Ordner zurück.
+- **Ordner umbenennen** schreibt per `rewritePathPrefix()` alle Pfade darunter um (auch Originale/Teile).
+- **Umzug** aus dem alten `./data` (`originals/<id>.*`): `storageMigration.ts`, läuft einmal beim Start,
+  wenn `LEGACY_DATA_DIR/scanny.db` existiert und `System/scanny.db` noch nicht. Sichert vorher alles nach
+  `System/_Sicherung-vor-Umzug-<Datum>/`, liest die DB per `VACUUM INTO` aus der Sicherungskopie
+  (der alte Ordner ist `:ro` gemountet und bleibt unberührt).
+- **FALLE:** `fs.cpSync` scheitert unter Docker Desktop auf macOS-Bind-Mounts (virtiofs) mit EACCES –
+  immer `copyDirSync()` aus `files.ts` verwenden. SQLite-WAL auf dem Bind-Mount ist getestet (parallel
+  lesen/schreiben, `kill -9` mitten im Schreiben → Integrität ok).

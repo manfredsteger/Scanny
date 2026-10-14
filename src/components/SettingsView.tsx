@@ -104,20 +104,20 @@ export function SettingsView({ paths, health }: SettingsViewProps) {
     {
       key: 'ARCHIVE_DIR',
       title: isHostMapped ? 'Archiv-Verzeichnis auf deinem Mac' : 'Archiv-Verzeichnis (ARCHIVE_DIR)',
-      description: 'Fertige, durchsuchbare Schwarz-Weiß-PDFs einsortiert nach Ordnern',
+      description: 'Je Beleg das durchsuchbare PDF und daneben das Original mit gleichem Namen',
       value: paths?.hostArchiveDir || paths?.archiveDir || './scanny/Archiv',
     },
     {
       key: 'DATA_DIR',
-      title: 'Internes Datenverzeichnis (DATA_DIR)',
-      description: 'SQLite-Datenbank, Originalscans und Vorschaubilder',
-      value: paths?.dataDir || './data',
+      title: isHostMapped ? 'Systemordner auf deinem Mac' : 'Systemordner (DATA_DIR)',
+      description: 'Datenbank und Cache (Vorschaubilder) – fürs Backup einfach den ganzen Scanny-Ordner sichern',
+      value: paths?.hostDataDir || paths?.dataDir || './scanny/System',
     },
     {
       key: 'DB_PATH',
       title: 'SQLite-Datenbankdatei',
       description: 'Lokale Datenbankdatei mit WAL-Modus und FTS5-Volltextindex',
-      value: paths?.dbPath || './data/scanny.db',
+      value: paths?.hostDbPath || paths?.dbPath || './scanny/System/scanny.db',
     },
   ];
 

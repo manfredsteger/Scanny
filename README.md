@@ -26,8 +26,8 @@ lokal in Docker auf dem Mac. Private Steuerbelege verlassen den Rechner nicht.
    den passenden Ordner vor. Werte prüfen, bei Bedarf korrigieren, bestätigen. Von Hand geänderte
    Felder überschreibt Scanny später nie wieder.
 
-4. **Ablegen** – der Beleg landet als `YYYY-MM-DD Titel.pdf` in `Scanny/Archiv/<Ordner>/`,
-   direkt im Finder lesbar. Auch ohne Scanny kommst du jederzeit an deine Unterlagen.
+4. **Ablegen** – der Beleg landet als `YYYY-MM-DD Titel.pdf` in `Scanny/Archiv/<Ordner>/`, das
+   Original (Foto, PDF …) mit gleichem Namen direkt daneben – im Finder lesbar. Auch ohne Scanny kommst du jederzeit an deine Unterlagen.
 
 ### Tastenkürzel im Eingang
 
@@ -105,16 +105,18 @@ WATCH_POLLING=true
 
 ## Datensicherung
 
-Scanny hält seine Daten an **zwei** Stellen – für ein vollständiges Backup brauchst du beide:
+Alles liegt in **einem** Ordner – dem in `SCANNY_PATH` (z. B. `~/Documents/Scanny`):
 
-| Ort | Inhalt | Ohne dieses Backup … |
-| :--- | :--- | :--- |
-| `SCANNY_PATH` (z. B. `~/Documents/Scanny`) | `Archiv/` mit allen fertigen PDFs, `Upload/` | … sind die Belege selbst weg. |
-| `data/` im Projektverzeichnis | SQLite-Datenbank, Originaldateien, Vorschaubilder | … fehlen Metadaten, Suche und Originale. |
+| Ort | Inhalt |
+| :--- | :--- |
+| `Archiv/` | Je Beleg das durchsuchbare PDF und daneben das Original mit gleichem Namen |
+| `System/scanny.db` | Datenbank: Titel, Datum, Betrag, Absender, Ordner, erkannter Text |
+| `System/Cache/` | Vorschaubilder – darf fehlen, Scanny erzeugt sie neu |
+| `Upload/` | Eingang zum Reinwerfen (normalerweise leer) |
 
-Beide Ordner einfach mitsichern (Time Machine, externe Platte, was du ohnehin nutzt). Die PDFs im
-Archiv sind normale Dateien mit sprechenden Namen – selbst wenn nur dieser Ordner übrig bleibt,
-bleiben deine Unterlagen lesbar und durchsuchbar.
+Für ein vollständiges Backup genügt es, diesen einen Ordner zu sichern (Time Machine, externe Platte –
+am saubersten bei gestopptem Scanny: `make stop`). Die Dateien haben sprechende Namen; selbst ohne
+Scanny bleiben deine Unterlagen lesbar und durchsuchbar. `System/LIESMICH.txt` erklärt die Struktur.
 
 ---
 

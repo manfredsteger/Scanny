@@ -17,6 +17,14 @@ settingsRouter.get('/settings/paths', (req: Request, res: Response) => {
     ? `${scannyHostPath.replace(/\/+$/, '')}/Archiv`
     : paths.archiveDir;
 
+  // Container-Pfad unterhalb von SCANNY_DIR → Pfad auf dem Mac (System/, Datenbank)
+  const toHost = (p: string) => {
+    const rel = path.relative(paths.scannyDir, p);
+    return scannyHostPath && !rel.startsWith('..') && !path.isAbsolute(rel)
+      ? `${scannyHostPath.replace(/\/+$/, '')}/${rel}`
+      : p;
+  };
+
   res.json({
     dataDir: paths.dataDir,
     scannyDir: paths.scannyDir,
@@ -26,6 +34,8 @@ settingsRouter.get('/settings/paths', (req: Request, res: Response) => {
     hostScannyDir,
     hostWatchDir,
     hostArchiveDir,
+    hostDataDir: toHost(paths.dataDir),
+    hostDbPath: toHost(paths.dbPath),
   });
 });
 

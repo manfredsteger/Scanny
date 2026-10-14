@@ -7,7 +7,8 @@ import { getDb, paths } from '../db.js';
 import { ingestFile } from '../pipeline/ingest.js';
 import { documentQueue } from '../pipeline/queue.js';
 import { ensureWorkImage, runScanPy } from '../pipeline/processDocument.js';
-import { moveOrCopySync, planArchivePdf } from '../pipeline/ocr.js';
+import { moveOrCopySync } from '../pipeline/ocr.js';
+import { applyPlanToDb, executePlan, GroupPlan, isBusy, planGroup, revertPlan } from '../pipeline/files.js';
 import { mergeDocuments, splitDocument } from '../pipeline/merge.js';
 import { purgeDocument, restoreDocument, TRASH_RETENTION_DAYS, trashDocument } from '../pipeline/trash.js';
 import { buildFtsQuery, SNIPPET_END, SNIPPET_START } from '../search.js';
@@ -159,7 +160,7 @@ documentsRouter.get('/stats', (req: Request, res: Response) => {
     }
 
     const trashRow = db
-      .prepare('SELECT COUNT(*) as count FROM documents WHERE deleted_at IS NOT NULL')
+      .prepare('SELECT COUNT(*) as count FROM documents WHERE deleted_at IS NOT NULL AND merged_into IS NULL')
       .get() as { count: number };
     stats.trash = trashRow?.count || 0;
 
@@ -181,7 +182,7 @@ documentsRouter.get('/documents', (req: Request, res: Response) => {
 
     // Standard: nur nicht gelöschte Belege. ?deleted=1 zeigt ausschließlich den Papierkorb.
     const wantsTrash = req.query.deleted === '1' || req.query.deleted === 'true';
-    conditions.push(wantsTrash ? 'd.deleted_at IS NOT NULL' : 'd.deleted_at IS NULL');
+    conditions.push(wantsTrash ? 'd.deleted_at IS NOT NULL AND d.merged_into IS NULL' : 'd.deleted_at IS NULL');
 
     if (q && typeof q === 'string' && q.trim()) {
       const cleanQ = q.trim();
@@ -744,42 +745,29 @@ export function patchDocument(id: number, input: any): PatchResult {
       finalStatus = finalFolderId !== null ? 'filed' : 'inbox';
     }
 
-    // DATEISYSTEM ZUERST (Regel 7): Archiv-PDF an Ordner/Titel/Datum anpassen, erst danach die DB
-    let finalPdfPath = existing.pdf_path;
-    if (folder_id !== undefined || title !== undefined || doc_date !== undefined) {
+    // DATEISYSTEM ZUERST (Regel 7): Dateigruppe (PDF + Original) an Ordner/Titel/Datum anpassen,
+    // erst danach die DB. Belege in Arbeit legt die Pipeline am Ende selbst passend ab.
+    let plan: GroupPlan | null = null;
+    if ((folder_id !== undefined || title !== undefined || doc_date !== undefined) && !isBusy(existing)) {
       try {
-        const target = planArchivePdf({
-          title: finalTitle,
-          doc_date: finalDocDate,
-          folder_id: finalFolderId,
-          pdf_path: existing.pdf_path,
-          original_name: existing.original_name,
-          created_at: existing.created_at,
-        });
-        if (target && target !== existing.pdf_path) {
-          moveOrCopySync(existing.pdf_path, target);
-          finalPdfPath = target;
-        }
+        plan = planGroup({ ...existing, title: finalTitle, doc_date: finalDocDate, folder_id: finalFolderId });
+        executePlan(plan);
       } catch (fsErr: any) {
-        console.error(`Archiv-PDF von Dokument ${id} konnte nicht verschoben werden:`, fsErr);
+        console.error(`Dateien von Dokument ${id} konnten nicht verschoben werden:`, fsErr);
         return {
           code: 500,
-          body: { error: `Archiv-PDF konnte nicht verschoben werden: ${fsErr?.message || fsErr}` },
+          body: { error: `Dateien konnten nicht verschoben werden: ${fsErr?.message || fsErr}` },
         };
       }
     }
+    const finalPdfPath = plan ? plan.pdf_path : existing.pdf_path;
 
     const rollbackPdf = () => {
-      if (finalPdfPath !== existing.pdf_path && finalPdfPath && existing.pdf_path) {
-        try {
-          moveOrCopySync(finalPdfPath, existing.pdf_path);
-        } catch (rbErr) {
-          console.error(`Archiv-PDF von Dokument ${id} konnte nicht zurückverschoben werden:`, rbErr);
-        }
-      }
+      if (plan) revertPlan(plan);
     };
 
     try {
+    db.transaction(() => {
     db.prepare(`
       UPDATE documents
       SET title = ?,
@@ -811,6 +799,8 @@ export function patchDocument(id: number, input: any): PatchResult {
       finalPdfPath,
       id
     );
+    if (plan) applyPlanToDb(plan);
+    })();
     } catch (dbErr) {
       rollbackPdf();
       throw dbErr;

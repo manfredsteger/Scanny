@@ -15,6 +15,7 @@ const { getDb, paths } = await import('../db.js');
 const { trashDocument, restoreDocument, purgeDocument, purgeExpiredTrash, trashDir, TRASH_DIR_NAME } =
   await import('./trash.js');
 const { mergeDocuments, splitDocument } = await import('./merge.js');
+const { syncDocumentFiles, PARTS_SUFFIX } = await import('./files.js');
 
 async function writePdf(target: string, pageCount: number): Promise<void> {
   fs.mkdirSync(path.dirname(target), { recursive: true });
@@ -48,8 +49,8 @@ async function createDocument(options: TestDocOptions): Promise<number> {
   const pdfPath = path.join(paths.archiveDir, '_Eingang', `${docDate} ${options.title}.pdf`);
   await writePdf(pdfPath, pageCount);
 
-  const originalPath = path.join(paths.originalsDir, `${id}.jpg`);
-  fs.mkdirSync(paths.originalsDir, { recursive: true });
+  // Original liegt als Teil der Dateigruppe direkt neben dem PDF
+  const originalPath = path.join(paths.archiveDir, '_Eingang', `${docDate} ${options.title}.jpg`);
   fs.writeFileSync(originalPath, 'nicht wirklich ein Bild');
 
   db.prepare('UPDATE documents SET pdf_path = ?, original_path = ? WHERE id = ?').run(pdfPath, originalPath, id);
@@ -66,7 +67,7 @@ beforeEach(() => {
   db.prepare('DELETE FROM documents').run();
   for (const dir of [path.join(paths.archiveDir, '_Eingang'), trashDir()]) {
     if (fs.existsSync(dir)) {
-      for (const entry of fs.readdirSync(dir)) fs.unlinkSync(path.join(dir, entry));
+      for (const entry of fs.readdirSync(dir)) fs.rmSync(path.join(dir, entry), { recursive: true, force: true });
     }
   }
 });
@@ -212,8 +213,11 @@ describe('Zusammenfügen und Trennen', () => {
     // Das zusammengefügte Dokument ist verworfen – seinen Archiv-Namen hat Beleg A zurück
     expect(getDoc(merged.id)).toBeUndefined();
     expect(getDoc(a).pdf_path).toBe(merged.pdf_path);
+    // PDF und Original jeder Gruppe liegen wieder nebeneinander, der Teile-Ordner ist weg
     expect(fs.readdirSync(path.join(paths.archiveDir, '_Eingang')).sort()).toEqual([
+      '2026-05-04 Teil A.jpg',
       '2026-05-04 Teil A.pdf',
+      '2026-05-04 Teil B.jpg',
       '2026-05-04 Teil B.pdf',
     ]);
     expect(fs.existsSync(trashDir()) ? fs.readdirSync(trashDir()) : []).toEqual([]);
@@ -222,5 +226,88 @@ describe('Zusammenfügen und Trennen', () => {
   it('lehnt das Trennen bei einem nicht zusammengefügten Beleg ab', async () => {
     const a = await createDocument({ title: 'Normaler Beleg' });
     expect(splitDocument(a).code).toBe(409);
+  });
+});
+
+describe('Dateigruppen (PDF + Original mit gleichem Namen)', () => {
+  const inbox = () => path.join(paths.archiveDir, '_Eingang');
+  const list = (dir: string) => (fs.existsSync(dir) ? fs.readdirSync(dir).sort() : []);
+
+  it('benennt PDF und Original gemeinsam um', async () => {
+    const id = await createDocument({ title: 'Alt' });
+    getDb().prepare("UPDATE documents SET title = 'Neu' WHERE id = ?").run(id);
+    syncDocumentFiles(id);
+    expect(list(inbox())).toEqual(['2026-05-04 Neu.jpg', '2026-05-04 Neu.pdf']);
+    expect(path.basename(getDoc(id).original_path)).toBe('2026-05-04 Neu.jpg');
+  });
+
+  it('weicht bei Namensgleichheit für die ganze Gruppe auf (2) aus', async () => {
+    const a = await createDocument({ title: 'Gleich' });
+    const b = await createDocument({ title: 'Anders' });
+    getDb().prepare("UPDATE documents SET title = 'Gleich' WHERE id = ?").run(b);
+    syncDocumentFiles(b);
+    expect(path.basename(getDoc(b).pdf_path)).toBe('2026-05-04 Gleich (2).pdf');
+    expect(path.basename(getDoc(b).original_path)).toBe('2026-05-04 Gleich (2).jpg');
+    expect(path.basename(getDoc(a).pdf_path)).toBe('2026-05-04 Gleich.pdf');
+  });
+
+  it('nennt ein PDF-Original "(Original).pdf"', async () => {
+    const id = await createDocument({ title: 'Digital' });
+    const doc = getDoc(id);
+    const pdfOriginal = path.join(inbox(), 'irgendwas.pdf');
+    fs.renameSync(doc.original_path, pdfOriginal);
+    getDb().prepare('UPDATE documents SET original_path = ? WHERE id = ?').run(pdfOriginal, id);
+    syncDocumentFiles(id);
+    expect(list(inbox())).toEqual(['2026-05-04 Digital (Original).pdf', '2026-05-04 Digital.pdf']);
+  });
+
+  it('legt beim Zusammenfügen die Teile nummeriert in "<Name> (Originale)/"', async () => {
+    const a = await createDocument({ title: 'Seite Eins' });
+    const b = await createDocument({ title: 'Seite Zwei' });
+    const merged = (await mergeDocuments([a, b])).body;
+
+    const partsDir = merged.pdf_path.replace(/\.pdf$/, '') + PARTS_SUFFIX;
+    expect(list(partsDir)).toEqual(['01 Seite Eins.jpg', '01 Seite Eins.pdf', '02 Seite Zwei.jpg', '02 Seite Zwei.pdf']);
+    expect(getDoc(a).merged_into).toBe(merged.id);
+    expect(getDoc(a).original_path).toBe(path.join(partsDir, '01 Seite Eins.jpg'));
+    // Teile tauchen NICHT im Papierkorb auf und werden nicht nach 30 Tagen gelöscht
+    expect(list(trashDir())).toEqual([]);
+    getDb().prepare("UPDATE documents SET deleted_at = '2000-01-01T00:00:00Z' WHERE id = ?").run(a);
+    expect(purgeExpiredTrash()).toBe(0);
+    expect(getDoc(a)).toBeDefined();
+  });
+
+  it('nimmt einen Stapel komplett mit in den Papierkorb und zurück', async () => {
+    const a = await createDocument({ title: 'Stapel A' });
+    const b = await createDocument({ title: 'Stapel B' });
+    const merged = (await mergeDocuments([a, b])).body;
+
+    expect(trashDocument(merged.id).code).toBe(200);
+    const trashed = getDoc(merged.id);
+    expect(path.dirname(trashed.pdf_path)).toBe(trashDir());
+    // Pfade der Teile wurden mitgezogen und stimmen auf der Platte
+    expect(fs.existsSync(getDoc(a).pdf_path)).toBe(true);
+    expect(fs.existsSync(getDoc(b).original_path)).toBe(true);
+    expect(getDoc(a).pdf_path.startsWith(trashDir())).toBe(true);
+
+    expect(restoreDocument(merged.id).code).toBe(200);
+    expect(fs.existsSync(getDoc(a).pdf_path)).toBe(true);
+    expect(getDoc(a).pdf_path.startsWith(inbox())).toBe(true);
+  });
+
+  it('löscht einen Stapel endgültig samt Teilen und Teile-Ordner', async () => {
+    const a = await createDocument({ title: 'Weg A' });
+    const b = await createDocument({ title: 'Weg B' });
+    const merged = (await mergeDocuments([a, b])).body;
+    expect(purgeDocument(merged.id).code).toBe(200);
+    expect(getDoc(a)).toBeUndefined();
+    expect(getDoc(b)).toBeUndefined();
+    expect(list(inbox())).toEqual([]);
+  });
+
+  it('lässt Belege in Arbeit nicht in den Papierkorb', async () => {
+    const id = await createDocument({ title: 'Läuft' });
+    getDb().prepare("UPDATE documents SET status = 'processing' WHERE id = ?").run(id);
+    expect(trashDocument(id).code).toBe(409);
   });
 });

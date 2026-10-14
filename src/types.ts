@@ -87,6 +87,8 @@ export interface SystemPaths {
   hostScannyDir?: string;
   hostWatchDir?: string;
   hostArchiveDir?: string;
+  hostDataDir?: string;
+  hostDbPath?: string;
 }
 
 export const COLOR_PRESETS = [

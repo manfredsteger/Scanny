@@ -2,8 +2,23 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { PDFDocument } from 'pdf-lib';
 import { getDb, paths } from '../db.js';
-import { archiveDirForFolder, determineArchivePdfPath, localDateString, syncArchivePdf } from './ocr.js';
-import { purgeDocument, restoreDocument, trashDocument } from './trash.js';
+import {
+  applyPlanToDb,
+  archiveDirForFolder,
+  executePlan,
+  groupLabel,
+  GroupPlan,
+  isBusy,
+  moveOrCopySync,
+  PARTS_SUFFIX,
+  planGroup,
+  reserveBase,
+  revertPlan,
+  sanitizeFilenameTitle,
+  rewritePathPrefix,
+  syncDocumentFiles,
+} from './files.js';
+import { purgeDocument, restoreDocument } from './trash.js';
 
 export interface MergeResult {
   code: number;
@@ -103,15 +118,15 @@ export async function mergeDocuments(ids: number[]): Promise<MergeResult> {
   const loaded = loadSources(ids);
   if (loaded.error) return { code: loaded.error.code, body: { error: loaded.error.message } };
   const docs = loaded.docs!;
-  const base = docs[0];
+  const base0 = docs[0];
 
   // Metadaten je Feld vom ersten Beleg, der dafür einen Wert hat (siehe firstValue).
   // Ordner und Status hängen bewusst zusammen: sie kommen aus derselben Quelle.
-  const folderSource = docs.find((d) => d.folder_id !== null) || base;
+  const folderSource = docs.find((d) => d.folder_id !== null) || base0;
   const meta = {
     folder_id: folderSource.folder_id as number | null,
     status: folderSource.status as string,
-    title: firstValue<string>(docs, 'title') ?? base.title,
+    title: firstValue<string>(docs, 'title') ?? base0.title,
     doc_date: firstValue<string>(docs, 'doc_date'),
     amount_cents: firstValue<number>(docs, 'amount_cents'),
     sender: firstValue<string>(docs, 'sender'),
@@ -148,47 +163,61 @@ export async function mergeDocuments(ids: number[]): Promise<MergeResult> {
   });
   const mergedOcrText = ocrParts.join('').trim() || null;
 
-  // 3. Quellen in den Papierkorb legen – erst danach ist der Dateiname im Archiv wieder frei
-  const trashed: number[] = [];
-  const rollbackSources = () => {
-    for (const id of trashed) {
-      try {
-        restoreDocument(id);
-      } catch (err) {
-        console.error(`[Zusammenfügen] Rücknahme für Dokument ${id} fehlgeschlagen:`, err);
-      }
-    }
-  };
-
-  for (const doc of docs) {
-    const res = trashDocument(doc.id);
-    if (res.code !== 200) {
-      rollbackSources();
-      return { code: res.code, body: res.body };
-    }
-    trashed.push(doc.id);
-  }
-
-  // 4. Zusammengefügtes PDF ins Archiv schreiben (Ordner und Name wie beim ersten Beleg)
+  // 3. Quellen samt Originalen als nummerierte Teile in einen vorläufigen Stapel-Ordner verschieben
+  //    ("01 Titel.pdf", "01 Titel.heic", …) – erst danach ist ihr Archiv-Name wieder frei
   const targetDir = archiveDirForFolder(meta.folder_id);
   if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
-  const dateStr =
-    meta.doc_date && /^\d{4}-\d{2}-\d{2}$/.test(String(meta.doc_date).trim())
-      ? String(meta.doc_date).trim()
-      : localDateString(base.created_at);
-  const titleToUse =
-    (meta.title && meta.title.trim()) || (base.original_name ? path.parse(base.original_name).name : 'Beleg');
-  const targetPdf = determineArchivePdfPath(targetDir, dateStr, titleToUse, null);
+  const tempDir = path.join(targetDir, `.Stapel-${Date.now()}`);
+  const partPlans: GroupPlan[] = [];
+  const width = String(docs.length).length < 2 ? 2 : String(docs.length).length;
+
+  const rollbackParts = () => {
+    for (const plan of [...partPlans].reverse()) revertPlan(plan);
+    try {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    } catch {}
+  };
+
+  try {
+    docs.forEach((doc, index) => {
+      const number = String(index + 1).padStart(width, '0');
+      const title = sanitizeFilenameTitle(
+        (doc.title && doc.title.trim()) || (doc.original_name ? path.parse(doc.original_name).name : 'Beleg')
+      );
+      const plan = planGroup(doc as any, { targetDir: tempDir, label: `${number} ${title}` });
+      executePlan(plan);
+      partPlans.push(plan);
+    });
+  } catch (err: any) {
+    console.error('[Zusammenfügen] Teile konnten nicht verschoben werden:', err);
+    rollbackParts();
+    return { code: 500, body: { error: `Belege konnten nicht verschoben werden: ${err?.message || err}` } };
+  }
+
+  // 4. Zusammengefügtes PDF + Teile-Ordner unter gemeinsamem Namen ablegen
+  const base = reserveBase(
+    targetDir,
+    groupLabel({ title: meta.title, doc_date: meta.doc_date, original_name: base0.original_name, created_at: base0.created_at }),
+    ['.pdf', PARTS_SUFFIX]
+  );
+  const targetPdf = path.join(targetDir, `${base}.pdf`);
+  const partsDir = path.join(targetDir, base + PARTS_SUFFIX);
+  const inParts = (p: string | null) => (p ? path.join(partsDir, path.relative(tempDir, p)) : null);
 
   try {
     fs.writeFileSync(targetPdf, mergedBytes);
+    moveOrCopySync(tempDir, partsDir);
   } catch (err: any) {
     console.error('[Zusammenfügen] Zusammengefügtes PDF konnte nicht geschrieben werden:', err);
-    rollbackSources();
+    try {
+      fs.unlinkSync(targetPdf);
+    } catch {}
+    if (fs.existsSync(partsDir) && !fs.existsSync(tempDir)) moveOrCopySync(partsDir, tempDir);
+    rollbackParts();
     return { code: 500, body: { error: `PDF konnte nicht gespeichert werden: ${err?.message || err}` } };
   }
 
-  // 5. Neues Dokument anlegen und die Herkunft der Seiten festhalten
+  // 5. Neues Dokument anlegen, Herkunft der Seiten festhalten, Quellen als Teile markieren
   const db = getDb();
   let newId: number;
   try {
@@ -209,8 +238,8 @@ export async function mergeDocuments(ids: number[]): Promise<MergeResult> {
         `)
         .run(
           meta.status,
-          base.source,
-          base.import_batch,
+          base0.source,
+          base0.import_batch,
           meta.folder_id,
           meta.title,
           meta.doc_date,
@@ -218,21 +247,33 @@ export async function mergeDocuments(ids: number[]): Promise<MergeResult> {
           meta.sender,
           meta.doc_type,
           meta.user_edited,
-          base.original_name,
+          base0.original_name,
           targetPdf,
           mergedPageCount,
-          base.color_mode || 'bw',
+          base0.color_mode || 'bw',
           mergedOcrText,
           meta.extraction,
           meta.file_date,
-          base.created_at
+          base0.created_at
         );
 
       const id = Number(info.lastInsertRowid);
       const insertPage = db.prepare(
         'INSERT INTO document_pages (document_id, page_no, source_document_id) VALUES (?, ?, ?)'
       );
-      docs.forEach((doc, index) => insertPage.run(id, index + 1, doc.id));
+      const markPart = db.prepare(`
+        UPDATE documents
+        SET merged_into = ?, deleted_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
+            pdf_path = ?, original_path = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+        WHERE id = ?
+      `);
+      docs.forEach((doc, index) => {
+        insertPage.run(id, index + 1, doc.id);
+        markPart.run(id, inParts(partPlans[index].pdf_path), inParts(partPlans[index].original_path), doc.id);
+        // War die Quelle selbst schon ein Stapel, ist ihr Teile-Ordner mitgewandert
+        const nested = partPlans[index].prefixRewrite;
+        if (nested) rewritePathPrefix(nested.from, inParts(nested.to)!);
+      });
       return id;
     })();
   } catch (dbErr: any) {
@@ -240,16 +281,19 @@ export async function mergeDocuments(ids: number[]): Promise<MergeResult> {
     try {
       fs.unlinkSync(targetPdf);
     } catch {}
-    rollbackSources();
+    try {
+      moveOrCopySync(partsDir, tempDir);
+    } catch {}
+    rollbackParts();
     return { code: 500, body: { error: `Zusammengefügtes Dokument konnte nicht gespeichert werden: ${dbErr?.message || dbErr}` } };
   }
 
   // 6. Vorschaubild des ersten Belegs übernehmen (Kopie – das Original bleibt im Papierkorb nutzbar)
   try {
-    if (base.thumb_path && fs.existsSync(base.thumb_path)) {
+    if (base0.thumb_path && fs.existsSync(base0.thumb_path)) {
       if (!fs.existsSync(paths.thumbsDir)) fs.mkdirSync(paths.thumbsDir, { recursive: true });
       const newThumb = path.join(paths.thumbsDir, `${newId}.webp`);
-      fs.copyFileSync(base.thumb_path, newThumb);
+      fs.copyFileSync(base0.thumb_path, newThumb);
       db.prepare('UPDATE documents SET thumb_path = ? WHERE id = ?').run(newThumb, newId);
     }
   } catch (thumbErr) {
@@ -273,13 +317,16 @@ export async function mergeDocuments(ids: number[]): Promise<MergeResult> {
 }
 
 /**
- * Trennt ein zusammengefügtes Dokument wieder auf: Die Quelldokumente werden aus dem Papierkorb
- * zurückgeholt, das zusammengefügte Dokument wird endgültig gelöscht.
+ * Trennt ein zusammengefügtes Dokument wieder auf: Die Teile wandern aus "<Name> (Originale)/"
+ * als eigenständige Belege zurück in ihren Ordner, das zusammengefügte Dokument wird gelöscht.
  */
 export function splitDocument(id: number): MergeResult {
   const db = getDb();
   const doc = db.prepare('SELECT * FROM documents WHERE id = ?').get(id) as any;
   if (!doc) return { code: 404, body: { error: 'Dokument nicht gefunden.' } };
+  if (doc.deleted_at) {
+    return { code: 409, body: { error: 'Das Dokument liegt im Papierkorb – bitte zuerst wiederherstellen.' } };
+  }
 
   const pages = db
     .prepare('SELECT page_no, source_document_id FROM document_pages WHERE document_id = ? ORDER BY page_no ASC')
@@ -302,9 +349,7 @@ export function splitDocument(id: number): MergeResult {
 
   for (const page of available) {
     const sourceId = page.source_document_id!;
-    const source = db.prepare('SELECT deleted_at FROM documents WHERE id = ?').get(sourceId) as
-      | { deleted_at: string | null }
-      | undefined;
+    const source = db.prepare('SELECT * FROM documents WHERE id = ?').get(sourceId) as any;
     if (!source) {
       failed.push({ id: sourceId, error: 'Beleg existiert nicht mehr.' });
       continue;
@@ -314,23 +359,55 @@ export function splitDocument(id: number): MergeResult {
       restored.push(sourceId);
       continue;
     }
-    const res = restoreDocument(sourceId);
-    if (res.code === 200) restored.push(sourceId);
-    else failed.push({ id: sourceId, error: res.body?.error || 'Wiederherstellen fehlgeschlagen.' });
+    if (source.merged_into !== id) {
+      // Alter Stand (vor dem Teile-Ordner): Quelle liegt im Papierkorb
+      const res = restoreDocument(sourceId);
+      if (res.code === 200) restored.push(sourceId);
+      else failed.push({ id: sourceId, error: res.body?.error || 'Wiederherstellen fehlgeschlagen.' });
+      continue;
+    }
+
+    // Teil aus dem Stapel-Ordner zurück in seinen Archivordner (Dateien zuerst, dann DB)
+    let plan: GroupPlan | null = null;
+    try {
+      plan = planGroup({ ...source, deleted_at: null, merged_into: null });
+      executePlan(plan);
+      const status =
+        source.status === 'inbox' || source.status === 'filed'
+          ? source.folder_id !== null ? 'filed' : 'inbox'
+          : source.status;
+      db.transaction(() => {
+        db.prepare(`
+          UPDATE documents
+          SET merged_into = NULL, deleted_at = NULL, status = ?,
+              updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+          WHERE id = ?
+        `).run(status, sourceId);
+        applyPlanToDb(plan!);
+      })();
+      restored.push(sourceId);
+    } catch (err: any) {
+      if (plan) revertPlan(plan);
+      failed.push({ id: sourceId, error: err?.message || 'Zurückholen fehlgeschlagen.' });
+    }
   }
 
   if (restored.length === 0) {
     return { code: 500, body: { error: 'Kein einziger Beleg konnte wiederhergestellt werden.', failed } };
   }
+  if (failed.length > 0) {
+    // Nicht verwerfen, solange Teile noch im Stapel stecken – sonst gingen sie verloren
+    return { code: 500, body: { error: 'Einige Teile konnten nicht zurückgeholt werden.', restored, failed } };
+  }
 
-  // Erst wenn mindestens ein Beleg zurück ist, das zusammengefügte Dokument verwerfen
+  // Erst wenn alle Teile zurück sind, das zusammengefügte Dokument verwerfen
   purgeDocument(id);
 
-  // Dessen PDF belegte bis eben den Archiv-Namen, die Quellen sind deshalb auf " (2)" ausgewichen.
+  // Dessen PDF belegte bis eben den Archiv-Namen, die Teile sind deshalb ggf. auf " (2)" ausgewichen.
   // Jetzt ist der Name wieder frei – Dateinamen an die DB-Werte angleichen.
   for (const sourceId of restored) {
     try {
-      syncArchivePdf(sourceId);
+      syncDocumentFiles(sourceId);
     } catch (err) {
       console.warn(`[Trennen] Dateiname von Dokument ${sourceId} konnte nicht angeglichen werden:`, err);
     }

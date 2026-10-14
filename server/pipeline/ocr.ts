@@ -3,81 +3,13 @@ import fs from 'node:fs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { PDFDocument } from 'pdf-lib';
-import { getDb, paths } from '../db.js';
+import { paths } from '../db.js';
+import { placeNewPdf } from './files.js';
 
 const execFileAsync = promisify(execFile);
 
-/**
- * Verschiebt eine Datei atomar; fällt bei EXDEV (unterschiedliche Mountpoints) auf Copy + Unlink zurück.
- */
-export function moveOrCopySync(src: string, dest: string): void {
-  try {
-    fs.renameSync(src, dest);
-  } catch (err: any) {
-    if (err && (err.code === 'EXDEV' || err.code === 'EPERM')) {
-      fs.copyFileSync(src, dest);
-      fs.unlinkSync(src);
-    } else {
-      throw err;
-    }
-  }
-}
-
-/**
- * Liefert YYYY-MM-DD in lokaler Zeit (TZ des Containers), nicht UTC.
- */
-export function localDateString(iso?: string | null): string {
-  const d = iso ? new Date(iso) : new Date();
-  const valid = isNaN(d.getTime()) ? new Date() : d;
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${valid.getFullYear()}-${pad(valid.getMonth() + 1)}-${pad(valid.getDate())}`;
-}
-
-/**
- * Bereinigt einen Titel für das Dateisystem (keine ungültigen Zeichen, max. 120 Zeichen gesamt).
- */
-export function sanitizeFilenameTitle(rawTitle: string): string {
-  return (
-    rawTitle
-      .replace(/[\x00-\x1F\x7F]/g, '')
-      .replace(/[/\\:*?"<>|]/g, '_')
-      .replace(/\s+/g, ' ')
-      .trim() || 'Beleg'
-  );
-}
-
-/**
- * Ermittelt den kollisionsfreien Zieldateipfad im Archiv:
- * Format: "<YYYY-MM-DD> <Titel>.pdf", max. 120 Zeichen, bei Kollision " (2)", " (3)" etc.
- */
-export function determineArchivePdfPath(
-  targetDir: string,
-  dateStr: string,
-  rawTitle: string,
-  currentPdfPath: string | null = null
-): string {
-  const cleanTitle = sanitizeFilenameTitle(rawTitle);
-  let base = `${dateStr} ${cleanTitle}`;
-  // Maximale Basislänge: 120 minus 4 Zeichen für ".pdf" = 116
-  if (base.length > 116) {
-    base = base.slice(0, 116).trim();
-  }
-
-  let finalName = `${base}.pdf`;
-  let counter = 2;
-
-  while (
-    fs.existsSync(path.join(targetDir, finalName)) &&
-    path.join(targetDir, finalName) !== currentPdfPath
-  ) {
-    const suffix = ` (${counter})`;
-    const maxBase = 116 - suffix.length;
-    finalName = `${base.slice(0, maxBase).trim()}${suffix}.pdf`;
-    counter++;
-  }
-
-  return path.join(targetDir, finalName);
-}
+// Gemeinsame Datei-Helfer liegen jetzt in files.ts (Dateigruppen); hier für bestehende Importe weitergereicht
+export { moveOrCopySync, localDateString, sanitizeFilenameTitle, archiveDirForFolder } from './files.js';
 
 /**
  * Löscht temporäre Arbeitsdateien für ein Dokument in DATA_DIR/work,
@@ -104,68 +36,6 @@ export function cleanupWorkFiles(id: number): void {
   } catch (err) {
     console.warn(`[Pipeline] Fehler beim Bereinigen von workDir für Dokument ${id}:`, err);
   }
-}
-
-/**
- * Archivverzeichnis für einen Ordner (bzw. _Eingang, wenn kein Ordner gesetzt ist).
- */
-export function archiveDirForFolder(folderId: number | null | undefined): string {
-  if (folderId) {
-    const folder = getDb().prepare('SELECT name FROM folders WHERE id = ?').get(folderId) as
-      | { name: string }
-      | undefined;
-    if (folder?.name) return path.join(paths.archiveDir, folder.name);
-  }
-  return path.join(paths.archiveDir, '_Eingang');
-}
-
-export interface ArchivePdfValues {
-  title: string | null;
-  doc_date: string | null;
-  folder_id: number | null;
-  pdf_path: string | null;
-  original_name: string | null;
-  created_at: string | null;
-}
-
-/**
- * Ziel-Pfad des Archiv-PDFs für die übergebenen Werte (Ordner, Titel, Datum).
- * Liefert null, wenn es (noch) kein PDF gibt. Legt das Zielverzeichnis bei Bedarf an.
- */
-export function planArchivePdf(values: ArchivePdfValues): string | null {
-  if (!values.pdf_path || !fs.existsSync(values.pdf_path)) return null;
-
-  const targetDir = archiveDirForFolder(values.folder_id);
-  if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
-
-  const dateStr =
-    values.doc_date && /^\d{4}-\d{2}-\d{2}$/.test(values.doc_date.trim())
-      ? values.doc_date.trim()
-      : localDateString(values.created_at);
-  const titleToUse =
-    (values.title && values.title.trim()) || (values.original_name ? path.parse(values.original_name).name : 'Beleg');
-
-  return determineArchivePdfPath(targetDir, dateStr, titleToUse, values.pdf_path);
-}
-
-/**
- * Bringt das Archiv-PDF eines Dokuments in Einklang mit den aktuellen DB-Werten
- * (Ordner, Titel, Datum): erst Datei verschieben/umbenennen, dann pdf_path speichern.
- * Liefert den (neuen) Pfad oder null, wenn es (noch) kein PDF gibt.
- */
-export function syncArchivePdf(id: number): string | null {
-  const db = getDb();
-  const doc = db
-    .prepare('SELECT title, doc_date, folder_id, pdf_path, original_name, created_at FROM documents WHERE id = ?')
-    .get(id) as ArchivePdfValues | undefined;
-  if (!doc) return null;
-
-  const newPath = planArchivePdf(doc);
-  if (!newPath || newPath === doc.pdf_path) return newPath ?? doc.pdf_path;
-
-  moveOrCopySync(doc.pdf_path!, newPath);
-  db.prepare('UPDATE documents SET pdf_path = ? WHERE id = ?').run(newPath, id);
-  return newPath;
 }
 
 // pdfminer liest eingebettete TrueType-Schriften ohne ToUnicode-Tabelle korrekt (z. B. PDFs aus
@@ -215,6 +85,8 @@ export interface OcrPipelineOptions {
 
 export interface OcrPipelineResult {
   pdfPath: string;
+  /** Original nach dem Ablegen (gleicher Grundname wie das PDF) */
+  originalPath: string | null;
   ocrText: string | null;
   pageCount: number;
 }
@@ -226,7 +98,7 @@ export interface OcrPipelineResult {
  * - Exit-Code 6 (bereits Text vorhanden) wird abgefangen und ist KEIN Fehler.
  * - Sidecar-Text wird ausgelesen.
  * - page_count wird über pdf-lib ermittelt.
- * - PDF wird in ARCHIVE_DIR abgelegt (<YYYY-MM-DD> <Titel>.pdf, max 120 Zeichen).
+ * - PDF wird mit dem Original als Dateigruppe im Archiv abgelegt (files.ts, placeNewPdf).
  * - Arbeitsdateien in work/ werden bis auf <id>.png bereinigt.
  */
 export async function runOcrPipeline(options: OcrPipelineOptions): Promise<OcrPipelineResult> {
@@ -367,68 +239,9 @@ export async function runOcrPipeline(options: OcrPipelineOptions): Promise<OcrPi
     console.warn(`[OCR] Konnte Seitenzahl für Dokument ${id} nicht auslesen:`, pdfErr);
   }
 
-  // 3. Zielverzeichnis im Archiv bestimmen
-  const db = getDb();
-  // Titel/Datum/Ordner frisch aus der DB lesen: sie können während der OCR geändert worden sein
-  const fresh = db
-    .prepare('SELECT title, doc_date, folder_id, pdf_path FROM documents WHERE id = ?')
-    .get(id) as { title: string | null; doc_date: string | null; folder_id: number | null; pdf_path: string | null } | undefined;
-  if (fresh) {
-    options.title = fresh.title;
-    options.docDate = fresh.doc_date;
-    options.folderId = fresh.folder_id;
-    options.currentPdfPath = fresh.pdf_path;
-  }
-  let targetDir: string;
-  if (options.folderId) {
-    const folder = db
-      .prepare('SELECT name FROM folders WHERE id = ?')
-      .get(options.folderId) as { name: string } | undefined;
-    if (folder && folder.name) {
-      targetDir = path.join(paths.archiveDir, folder.name);
-    } else {
-      targetDir = path.join(paths.archiveDir, '_Eingang');
-    }
-  } else {
-    targetDir = path.join(paths.archiveDir, '_Eingang');
-  }
-
-  if (!fs.existsSync(targetDir)) {
-    fs.mkdirSync(targetDir, { recursive: true });
-  }
-
-  // 4. Dateiname generieren (<YYYY-MM-DD> <Titel>.pdf, max. 120 Zeichen)
-  const dateStr =
-    options.docDate && /^\d{4}-\d{2}-\d{2}$/.test(options.docDate.trim())
-      ? options.docDate.trim()
-      : localDateString(options.createdAt);
-
-  const titleToUse =
-    (options.title && options.title.trim()) ||
-    (options.originalName ? path.parse(options.originalName).name : 'Beleg');
-
-  const finalPdfPath = determineArchivePdfPath(
-    targetDir,
-    dateStr,
-    titleToUse,
-    options.currentPdfPath
-  );
-
-  // Altes Archiv-PDF löschen, falls es sich geändert hat und noch existiert
-  if (
-    options.currentPdfPath &&
-    options.currentPdfPath !== finalPdfPath &&
-    fs.existsSync(options.currentPdfPath)
-  ) {
-    try {
-      fs.unlinkSync(options.currentPdfPath);
-    } catch (unlinkErr) {
-      console.warn(`[OCR] Konnte altes PDF ${options.currentPdfPath} nicht löschen:`, unlinkErr);
-    }
-  }
-
-  // PDF ins Archiv verschieben/kopieren
-  moveOrCopySync(workPdfPath, finalPdfPath);
+  // 3. PDF zusammen mit dem Original als Dateigruppe ablegen (Name nach frischen DB-Werten)
+  const placed = placeNewPdf(id, workPdfPath);
+  const finalPdfPath = placed.pdfPath;
 
   // 5. Arbeitsdateien in DATA_DIR/work nach Erfolg löschen, AUSSER dem PNG
   cleanupWorkFiles(id);
@@ -441,6 +254,7 @@ export async function runOcrPipeline(options: OcrPipelineOptions): Promise<OcrPi
 
   return {
     pdfPath: finalPdfPath,
+    originalPath: placed.originalPath,
     ocrText,
     pageCount,
   };

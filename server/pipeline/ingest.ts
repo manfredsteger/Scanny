@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import exifr from 'exifr';
 import { getDb, paths } from '../db.js';
 import { documentQueue } from './queue.js';
+import { archiveDirForFolder, groupLabel, originalSuffix, reserveBase } from './files.js';
 
 export interface IngestOptions {
   sourcePath: string;
@@ -156,17 +157,23 @@ export async function ingestFile(options: IngestOptions): Promise<number> {
   );
   const docId = Number(info.lastInsertRowid);
 
-  // 3. Datei nach DATA_DIR/originals/<id>.<ext> verschieben
-  if (!fs.existsSync(paths.originalsDir)) {
-    fs.mkdirSync(paths.originalsDir, { recursive: true });
+  // 3. Original mit sprechendem Namen in den Eingang legen ("YYYY-MM-DD Dateiname.ext").
+  //    Nach der Verarbeitung bekommt die Gruppe (PDF + Original) den erkannten Titel.
+  const inboxDir = archiveDirForFolder(null);
+  if (!fs.existsSync(inboxDir)) {
+    fs.mkdirSync(inboxDir, { recursive: true });
   }
-
-  const destPath = path.join(paths.originalsDir, `${docId}${ext}`);
+  const base = reserveBase(
+    inboxDir,
+    groupLabel({ title: initialTitle, doc_date: fileDate, original_name: rawOriginalName, created_at: null }),
+    ['.pdf', originalSuffix(rawOriginalName || ext)]
+  );
+  const destPath = path.join(inboxDir, base + originalSuffix(rawOriginalName || ext));
 
   try {
     moveOrCopySync(options.sourcePath, destPath);
   } catch (err: any) {
-    const errorMsg = `Verschieben ins Originale-Archiv fehlgeschlagen: ${err?.message || err}`;
+    const errorMsg = `Verschieben in den Eingang fehlgeschlagen: ${err?.message || err}`;
     console.error(`[Ingest] ${errorMsg}`);
     db.prepare(`
       UPDATE documents
