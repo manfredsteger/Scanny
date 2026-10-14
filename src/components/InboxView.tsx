@@ -199,12 +199,11 @@ export function InboxView({
     setIsDropActive(false);
   };
 
-  const handleDrop = async (e: React.DragEvent) => {
+  // Hochladen übernimmt der globale Drop-Handler in App.tsx (inkl. Ordnern) –
+  // hier zusätzlich hochzuladen hat jede Datei doppelt angelegt.
+  const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setIsDropActive(false);
-    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      await onUploadFiles(e.dataTransfer.files);
-    }
   };
 
   const handleFileInputChange = async (e: React.ChangeEvent<HTMLInputElement>) => {

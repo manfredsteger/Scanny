@@ -10,6 +10,7 @@ import { ImportDialog } from './components/ImportDialog';
 import { DocumentDetailDrawer } from './components/DocumentDetailDrawer';
 import { TrashView } from './components/TrashView';
 import { MergeDialog } from './components/MergeDialog';
+import { collectDroppedFiles } from './dropFiles';
 import {
   Folder,
   ActiveView,
@@ -324,9 +325,9 @@ export default function App() {
       e.preventDefault();
       dragCounter.current = 0;
       setIsWindowDragging(false);
-      if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
-        await handleUploadFiles(e.dataTransfer.files);
-      }
+      if (!e.dataTransfer) return;
+      const files = await collectDroppedFiles(e.dataTransfer);
+      if (files.length > 0) await handleUploadFiles(files);
     };
 
     window.addEventListener('dragenter', handleDragEnter);
