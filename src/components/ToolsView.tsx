@@ -34,11 +34,13 @@ import {
   ChevronDown,
   Layers,
   Check,
+  EyeOff,
 } from 'lucide-react';
 import { Folder, StudioPageItem } from '../types';
 import { DocumentStudioModal, StudioMode } from './DocumentStudioModal';
 import { PdfCompressModal } from './tools/PdfCompressModal';
 import { PdfOcrModal } from './tools/PdfOcrModal';
+import { PdfRedactModal } from './tools/PdfRedactModal';
 import { PdfCompareModal } from './tools/PdfCompareModal';
 
 interface ToolsViewProps {
@@ -93,6 +95,7 @@ export function ToolsView({
   const [isCompressModalOpen, setIsCompressModalOpen] = useState(false);
   const [isOcrModalOpen, setIsOcrModalOpen] = useState(false);
   const [isCompareModalOpen, setIsCompareModalOpen] = useState(false);
+  const [isRedactModalOpen, setIsRedactModalOpen] = useState(false);
   const [studioPageNumbers, setStudioPageNumbers] = useState(false);
   const [studioNotice, setStudioNotice] = useState<string | null>(null);
   const [toolsNotice, setToolsNotice] = useState<string | null>(null);
@@ -202,6 +205,9 @@ export function ToolsView({
       case 'compare':
         setIsCompareModalOpen(true);
         break;
+      case 'redact':
+        setIsRedactModalOpen(true);
+        break;
       default:
         setStudioMode('general');
         fileInputRef.current?.click();
@@ -282,6 +288,17 @@ export function ToolsView({
       colorClass: 'border-emerald-500/30 hover:border-emerald-500/60 dark:hover:border-emerald-400/60',
       iconBgClass: 'bg-emerald-500/10 dark:bg-emerald-500/20',
       badge: 'OCR',
+    },
+    {
+      id: 'redact',
+      title: 'Bereiche schwärzen',
+      description:
+        'Du markierst selbst, was unkenntlich werden soll (IBAN, Adresse …) – Scanny entfernt den Inhalt darunter dauerhaft und prüft das Ergebnis.',
+      icon: <EyeOff className="w-5 h-5 text-zinc-700 dark:text-zinc-300" />,
+      category: 'Schützen',
+      colorClass: 'border-zinc-400/40 hover:border-zinc-500/70 dark:hover:border-zinc-400/60',
+      iconBgClass: 'bg-zinc-500/10 dark:bg-zinc-500/20',
+      badge: 'Von Hand',
     },
 
     // 3. Schützen
@@ -811,6 +828,18 @@ export function ToolsView({
         key={isOcrModalOpen ? 'offen' : 'zu'}
         isOpen={isOcrModalOpen}
         onClose={() => setIsOcrModalOpen(false)}
+      />
+
+      <PdfRedactModal
+
+        key={isRedactModalOpen ? 'offen' : 'zu'}
+
+        isOpen={isRedactModalOpen}
+
+        onClose={() => setIsRedactModalOpen(false)}
+
+        onRefresh={onRefresh}
+
       />
 
       <PdfCompareModal

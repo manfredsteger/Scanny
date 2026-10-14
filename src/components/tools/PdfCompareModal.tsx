@@ -48,7 +48,7 @@ export function PdfCompareModal({ isOpen, onClose }: PdfCompareModalProps) {
         <button
           type="button"
           onClick={onClose}
-          className="p-1.5 text-zinc-400 hover:text-zinc-700 dark:hover:text-white rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800 cursor-pointer"
+          className="p-1.5 text-zinc-500 dark:text-zinc-400 hover:text-zinc-700 dark:hover:text-white rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800 cursor-pointer"
         >
           <X className="w-5 h-5" />
         </button>
@@ -76,7 +76,7 @@ export function PdfCompareModal({ isOpen, onClose }: PdfCompareModalProps) {
             {file1Url ? (
               <iframe src={file1Url} title="Dokument A" className="w-full h-full rounded border-0" />
             ) : (
-              <div className="text-center p-6 text-zinc-400 dark:text-zinc-500 text-xs space-y-2">
+              <div className="text-center p-6 text-zinc-500 dark:text-zinc-400 dark:text-zinc-500 text-xs space-y-2">
                 <FileText className="w-10 h-10 mx-auto opacity-30" />
                 <p>Erstes Dokument auswählen oder hineinziehen</p>
               </div>
@@ -105,7 +105,7 @@ export function PdfCompareModal({ isOpen, onClose }: PdfCompareModalProps) {
             {file2Url ? (
               <iframe src={file2Url} title="Dokument B" className="w-full h-full rounded border-0" />
             ) : (
-              <div className="text-center p-6 text-zinc-400 dark:text-zinc-500 text-xs space-y-2">
+              <div className="text-center p-6 text-zinc-500 dark:text-zinc-400 dark:text-zinc-500 text-xs space-y-2">
                 <FileText className="w-10 h-10 mx-auto opacity-30" />
                 <p>Zweites Dokument zum Vergleichen auswählen</p>
               </div>

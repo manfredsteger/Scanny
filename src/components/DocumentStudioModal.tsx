@@ -110,9 +110,21 @@ export function DocumentStudioModal({
       if (exportDropdownRef.current && !exportDropdownRef.current.contains(e.target as Node)) {
         setIsExportDropdownOpen(false);
       }
+      // Export-Menü einer Seite: Knopf und Menü selbst stoppen ihre Klicks – jeder andere Klick schließt
+      setActiveCardExportMenu(null);
+    };
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setActiveCardExportMenu(null);
+        setIsExportDropdownOpen(false);
+      }
     };
     window.addEventListener('click', handleClickOutside);
-    return () => window.removeEventListener('click', handleClickOutside);
+    window.addEventListener('keydown', handleEscape);
+    return () => {
+      window.removeEventListener('click', handleClickOutside);
+      window.removeEventListener('keydown', handleEscape);
+    };
   }, []);
 
   useEffect(() => {
@@ -384,38 +396,38 @@ export function DocumentStudioModal({
 
     <div
       id="document-studio-modal"
-      className="fixed inset-0 z-50 flex flex-col bg-zinc-950/90 backdrop-blur-md text-zinc-100 animate-in fade-in duration-200"
+      className="fixed inset-0 z-50 flex flex-col bg-white/90 dark:bg-zinc-950/90 backdrop-blur-md text-zinc-900 dark:text-zinc-100 animate-in fade-in duration-200"
     >
       {/* Kopfzeile der Werkbank */}
-      <header className="min-h-16 px-4 md:px-6 py-2.5 bg-zinc-900 border-b border-zinc-800 flex flex-wrap items-center justify-between gap-3 shrink-0 select-none shadow-md">
+      <header className="min-h-16 px-4 md:px-6 py-2.5 bg-white dark:bg-zinc-900 border-b border-zinc-200 dark:border-zinc-800 flex flex-wrap items-center justify-between gap-3 shrink-0 select-none shadow-md">
         {/* Linke Seite: Abbrechen Button, Scanny Brand & Dokumentname */}
         <div className="flex items-center gap-3">
           <button
             type="button"
             id="studio-cancel-button"
             onClick={onClose}
-            className="px-3 py-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 hover:text-white border border-zinc-700 text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer shadow-xs"
+            className="px-3 py-1.5 rounded-xl bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-800 dark:text-zinc-200 hover:text-zinc-900 dark:hover:text-white border border-zinc-300 dark:border-zinc-700 text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer shadow-xs"
             title="Werkbank schließen und abbrechen (Zurück zu Tools)"
           >
-            <ArrowLeft className="w-4 h-4 text-zinc-400" />
+            <ArrowLeft className="w-4 h-4 text-zinc-500 dark:text-zinc-400" />
             <span>Abbrechen</span>
           </button>
 
-          <div className="hidden sm:flex items-center gap-2 pl-1 border-l border-zinc-800">
+          <div className="hidden sm:flex items-center gap-2 pl-1 border-l border-zinc-200 dark:border-zinc-800">
             <div className="w-8 h-8 rounded-xl bg-blue-600 text-white flex items-center justify-center shadow-xs">
               <ScanLine className="w-4 h-4" />
             </div>
             <div>
               <div className="flex items-center gap-1.5">
-                <span className="text-xs font-bold text-white tracking-tight">Scanny Werkbank</span>
+                <span className="text-xs font-bold text-zinc-900 dark:text-white tracking-tight">Scanny Werkbank</span>
                 {mode === 'rotate' && (
-                  <span className="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-amber-500/20 text-amber-300 border border-amber-500/30 flex items-center gap-1">
+                  <span className="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/30 flex items-center gap-1">
                     <RotateCw className="w-3 h-3 text-amber-400" />
                     <span>Drehen</span>
                   </span>
                 )}
                 {mode === 'merge' && (
-                  <span className="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-blue-500/20 text-blue-300 border border-blue-500/30 flex items-center gap-1">
+                  <span className="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-blue-500/20 text-blue-700 dark:text-blue-300 border border-blue-500/30 flex items-center gap-1">
                     <Merge className="w-3 h-3 text-blue-400" />
                     <span>Zusammenführen</span>
                   </span>
@@ -427,7 +439,7 @@ export function DocumentStudioModal({
                   </span>
                 )}
               </div>
-              <p className="text-[10px] text-zinc-400">
+              <p className="text-[10px] text-zinc-500 dark:text-zinc-400">
                 {pages.length} Seite{pages.length === 1 ? '' : 'n'} • {uniqueFiles.length} Quell-Datei{uniqueFiles.length === 1 ? '' : 'en'}
               </p>
             </div>
@@ -439,18 +451,18 @@ export function DocumentStudioModal({
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               placeholder="Dokumentenname"
-              className="bg-zinc-800 hover:bg-zinc-800/90 focus:bg-zinc-800 border border-zinc-700 rounded-lg px-2.5 py-1 text-xs md:text-sm font-semibold text-white focus:outline-none focus:ring-2 focus:ring-blue-500/50 w-44 md:w-64 transition-all"
+              className="bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-100/90 dark:hover:bg-zinc-800/90 focus:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 rounded-lg px-2.5 py-1 text-xs md:text-sm font-semibold text-zinc-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500/50 w-44 md:w-64 transition-all"
               title="Klicken zum Umbenennen des Ziel-Dokuments"
             />
-            <span className="text-xs text-zinc-400 font-mono">.pdf</span>
+            <span className="text-xs text-zinc-500 dark:text-zinc-400 font-mono">.pdf</span>
           </div>
         </div>
 
         {/* Toolbar & Aktionen */}
         <div className="flex flex-wrap items-center gap-2">
           {/* DREH-ZENTRALE: Klar beschriftete Tasten, kein verwirrendes 'alle alle' mehr */}
-          <div className="flex items-center gap-1 bg-zinc-800/95 p-1 rounded-xl border border-zinc-700/80 text-xs">
-            <span className="text-[11px] font-semibold text-zinc-400 px-2 flex items-center gap-1.5 hidden xl:inline-flex">
+          <div className="flex items-center gap-1 bg-zinc-100/95 dark:bg-zinc-800/95 p-1 rounded-xl border border-zinc-300/80 dark:border-zinc-700/80 text-xs">
+            <span className="text-[11px] font-semibold text-zinc-500 dark:text-zinc-400 px-2 flex items-center gap-1.5 hidden xl:inline-flex">
               <RotateCw className="w-3.5 h-3.5 text-blue-400" />
               <span>Alle drehen:</span>
             </span>
@@ -458,7 +470,7 @@ export function DocumentStudioModal({
               type="button"
               id="rotate-all-ccw-btn"
               onClick={() => handleRotateAll(-90)}
-              className="px-2.5 py-1.5 bg-zinc-700/80 hover:bg-zinc-700 text-zinc-200 hover:text-white rounded-lg flex items-center gap-1.5 cursor-pointer transition-colors shadow-xs"
+              className="px-2.5 py-1.5 bg-zinc-200/80 dark:bg-zinc-700/80 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-800 dark:text-zinc-200 hover:text-zinc-900 dark:hover:text-white rounded-lg flex items-center gap-1.5 cursor-pointer transition-colors shadow-xs"
               title="Alle Seiten um 90° nach links (gegen den Uhrzeigersinn) drehen"
             >
               <RotateCcw className="w-3.5 h-3.5 text-blue-400" />
@@ -468,7 +480,7 @@ export function DocumentStudioModal({
               type="button"
               id="rotate-all-cw-btn"
               onClick={() => handleRotateAll(90)}
-              className="px-2.5 py-1.5 bg-zinc-700/80 hover:bg-zinc-700 text-zinc-200 hover:text-white rounded-lg flex items-center gap-1.5 cursor-pointer transition-colors shadow-xs"
+              className="px-2.5 py-1.5 bg-zinc-200/80 dark:bg-zinc-700/80 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-800 dark:text-zinc-200 hover:text-zinc-900 dark:hover:text-white rounded-lg flex items-center gap-1.5 cursor-pointer transition-colors shadow-xs"
               title="Alle Seiten um 90° nach rechts (im Uhrzeigersinn) drehen"
             >
               <RotateCw className="w-3.5 h-3.5 text-blue-400" />
@@ -478,7 +490,7 @@ export function DocumentStudioModal({
               type="button"
               id="rotate-all-180-btn"
               onClick={() => handleRotateAll(180)}
-              className="px-2.5 py-1.5 bg-zinc-700/80 hover:bg-zinc-700 text-zinc-200 hover:text-white rounded-lg flex items-center gap-1.5 cursor-pointer transition-colors shadow-xs hidden sm:flex"
+              className="px-2.5 py-1.5 bg-zinc-200/80 dark:bg-zinc-700/80 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-800 dark:text-zinc-200 hover:text-zinc-900 dark:hover:text-white rounded-lg flex items-center gap-1.5 cursor-pointer transition-colors shadow-xs hidden sm:flex"
               title="Alle Seiten um 180° auf den Kopf bzw. aufrecht drehen (Kopfstand beheben)"
             >
               <RefreshCw className="w-3.5 h-3.5 text-amber-400" />
@@ -488,7 +500,7 @@ export function DocumentStudioModal({
               <button
                 type="button"
                 onClick={handleResetRotation}
-                className="px-2 py-1.5 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-700 rounded-lg flex items-center gap-1 cursor-pointer transition-colors"
+                className="px-2 py-1.5 text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-200 hover:bg-zinc-200 dark:hover:bg-zinc-700 rounded-lg flex items-center gap-1 cursor-pointer transition-colors"
                 title="Alle Drehungen zurücksetzen auf 0°"
               >
                 <Undo2 className="w-3 h-3" />
@@ -501,7 +513,7 @@ export function DocumentStudioModal({
           <button
             type="button"
             onClick={handleReverseOrder}
-            className="px-3 py-1.5 rounded-xl border border-zinc-700 bg-zinc-800 hover:bg-zinc-700 text-xs text-zinc-300 hover:text-white flex items-center gap-1.5 transition-colors cursor-pointer hidden md:flex"
+            className="px-3 py-1.5 rounded-xl border border-zinc-300 dark:border-zinc-700 bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-xs text-zinc-700 dark:text-zinc-300 hover:text-zinc-900 dark:hover:text-white flex items-center gap-1.5 transition-colors cursor-pointer hidden md:flex"
             title="Reihenfolge aller Seiten umkehren"
           >
             <ArrowUpDown className="w-3.5 h-3.5" />
@@ -513,7 +525,7 @@ export function DocumentStudioModal({
             type="button"
             onClick={() => fileInputRef.current?.click()}
             disabled={isAddingFiles}
-            className="px-3 py-1.5 rounded-xl border border-zinc-700 bg-zinc-800 hover:bg-zinc-700 text-xs text-zinc-300 hover:text-white flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
+            className="px-3 py-1.5 rounded-xl border border-zinc-300 dark:border-zinc-700 bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-xs text-zinc-700 dark:text-zinc-300 hover:text-zinc-900 dark:hover:text-white flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
             title="Weitere Dateien oder Seiten anhängen"
           >
             {isAddingFiles ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
@@ -527,7 +539,7 @@ export function DocumentStudioModal({
             className={`px-3 py-1.5 rounded-xl border text-xs flex items-center gap-1.5 transition-colors cursor-pointer ${
               showSettings || pageNumbering.enabled || compression !== 'none'
                 ? 'bg-blue-600/20 border-blue-500/50 text-blue-300 font-semibold'
-                : 'border-zinc-700 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white'
+                : 'border-zinc-300 dark:border-zinc-700 bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-300 hover:text-zinc-900 dark:hover:text-white'
             }`}
             title="Seitenzahlen & Komprimierung konfigurieren"
           >
@@ -538,7 +550,7 @@ export function DocumentStudioModal({
             )}
           </button>
 
-          <div className="h-6 w-px bg-zinc-800 mx-1 hidden sm:block" />
+          <div className="h-6 w-px bg-zinc-100 dark:bg-zinc-800 mx-1 hidden sm:block" />
 
           {/* HAUPTAKTION 1: Exportieren mit Dropdown (PDF, JPG, PNG, Einzelseiten) */}
           <div className="relative" ref={exportDropdownRef}>
@@ -550,13 +562,13 @@ export function DocumentStudioModal({
                 e.stopPropagation();
                 setIsExportDropdownOpen(!isExportDropdownOpen);
               }}
-              className="px-3.5 py-1.5 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer shadow-xs disabled:opacity-50"
+              className="px-3.5 py-1.5 bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 border border-zinc-300 dark:border-zinc-700 text-zinc-900 dark:text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer shadow-xs disabled:opacity-50"
               title="Dokument oder einzelne Seiten exportieren (PDF, JPG, PNG)"
             >
               <Download className="w-3.5 h-3.5 text-blue-400" />
               <span>Exportieren</span>
               <ChevronDown
-                className={`w-3.5 h-3.5 text-zinc-400 transition-transform ${
+                className={`w-3.5 h-3.5 text-zinc-500 dark:text-zinc-400 transition-transform ${
                   isExportDropdownOpen ? 'rotate-180' : ''
                 }`}
               />
@@ -566,10 +578,10 @@ export function DocumentStudioModal({
             {isExportDropdownOpen && (
               <div
                 id="studio-export-menu"
-                className="absolute right-0 top-full mt-2 w-72 bg-zinc-900 border border-zinc-700 rounded-2xl shadow-2xl p-2 z-50 text-left animate-in fade-in zoom-in-95 duration-100"
+                className="absolute right-0 top-full mt-2 w-72 bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-2xl shadow-2xl p-2 z-50 text-left animate-in fade-in zoom-in-95 duration-100"
                 onClick={(e) => e.stopPropagation()}
               >
-                <div className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-zinc-400">
+                <div className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
                   Dokument-Export
                 </div>
 
@@ -581,14 +593,14 @@ export function DocumentStudioModal({
                     setIsExportDropdownOpen(false);
                     handleAssemble('download', 'pdf');
                   }}
-                  className="w-full px-3 py-2 rounded-xl text-left hover:bg-zinc-800 text-xs text-zinc-200 hover:text-white flex items-center gap-2.5 transition-colors cursor-pointer group"
+                  className="w-full px-3 py-2 rounded-xl text-left hover:bg-zinc-100 dark:hover:bg-zinc-800 text-xs text-zinc-800 dark:text-zinc-200 hover:text-zinc-900 dark:hover:text-white flex items-center gap-2.5 transition-colors cursor-pointer group"
                 >
                   <div className="w-7 h-7 rounded-lg bg-red-500/20 text-red-400 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
                     <FileText className="w-4 h-4" />
                   </div>
                   <div>
-                    <div className="font-semibold text-white">Als PDF Dokument (.pdf)</div>
-                    <div className="text-[10px] text-zinc-400">Alle Seiten zusammengefügt herunterladen</div>
+                    <div className="font-semibold text-zinc-900 dark:text-white">Als PDF Dokument (.pdf)</div>
+                    <div className="text-[10px] text-zinc-500 dark:text-zinc-400">Alle Seiten zusammengefügt herunterladen</div>
                   </div>
                 </button>
 
@@ -600,20 +612,20 @@ export function DocumentStudioModal({
                     setIsExportDropdownOpen(false);
                     handleAssemble('download', 'images_zip');
                   }}
-                  className="w-full px-3 py-2 rounded-xl text-left hover:bg-zinc-800 text-xs text-zinc-200 hover:text-white flex items-center gap-2.5 transition-colors cursor-pointer group"
+                  className="w-full px-3 py-2 rounded-xl text-left hover:bg-zinc-100 dark:hover:bg-zinc-800 text-xs text-zinc-800 dark:text-zinc-200 hover:text-zinc-900 dark:hover:text-white flex items-center gap-2.5 transition-colors cursor-pointer group"
                 >
                   <div className="w-7 h-7 rounded-lg bg-amber-500/20 text-amber-400 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
                     <Layers className="w-4 h-4" />
                   </div>
                   <div>
-                    <div className="font-semibold text-white">Alle Seiten als Bilder (.zip)</div>
-                    <div className="text-[10px] text-zinc-400">Alle Seiten als JPG im ZIP-Archiv</div>
+                    <div className="font-semibold text-zinc-900 dark:text-white">Alle Seiten als Bilder (.zip)</div>
+                    <div className="text-[10px] text-zinc-500 dark:text-zinc-400">Alle Seiten als JPG im ZIP-Archiv</div>
                   </div>
                 </button>
 
-                <div className="h-px bg-zinc-800 my-1.5 mx-1" />
+                <div className="h-px bg-zinc-100 dark:bg-zinc-800 my-1.5 mx-1" />
 
-                <div className="px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-zinc-400">
+                <div className="px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
                   Einzelne Seite(n) exportieren
                 </div>
 
@@ -625,25 +637,25 @@ export function DocumentStudioModal({
                     setIsExportDropdownOpen(false);
                     setIsSinglePageModalOpen(true);
                   }}
-                  className="w-full px-3 py-2 rounded-xl text-left hover:bg-zinc-800 text-xs text-zinc-200 hover:text-white flex items-center gap-2.5 transition-colors cursor-pointer group"
+                  className="w-full px-3 py-2 rounded-xl text-left hover:bg-zinc-100 dark:hover:bg-zinc-800 text-xs text-zinc-800 dark:text-zinc-200 hover:text-zinc-900 dark:hover:text-white flex items-center gap-2.5 transition-colors cursor-pointer group"
                 >
                   <div className="w-7 h-7 rounded-lg bg-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
                     <ImageIcon className="w-4 h-4" />
                   </div>
                   <div>
-                    <div className="font-semibold text-white flex items-center gap-1.5">
+                    <div className="font-semibold text-zinc-900 dark:text-white flex items-center gap-1.5">
                       <span>Einzelseite als Bild (JPG/PNG)</span>
-                      <span className="px-1.5 py-0.2 rounded text-[9px] bg-emerald-500/20 text-emerald-300 font-bold">
+                      <span className="px-1.5 py-0.2 rounded text-[9px] bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 font-bold">
                         Neu
                       </span>
                     </div>
-                    <div className="text-[10px] text-zinc-400">Seite wählen und als JPG oder PNG sichern</div>
+                    <div className="text-[10px] text-zinc-500 dark:text-zinc-400">Seite wählen und als JPG oder PNG sichern</div>
                   </div>
                 </button>
 
                 {/* Direkte Schnellauswahl erste/aktuelle Seite als JPG/PNG */}
                 {pages.length > 0 && (
-                  <div className="mt-1 pt-1.5 border-t border-zinc-800/80 px-2 pb-1">
+                  <div className="mt-1 pt-1.5 border-t border-zinc-200/80 dark:border-zinc-800/80 px-2 pb-1">
                     <div className="text-[10px] text-zinc-500 mb-1 px-1">Schnellexport Seite 1:</div>
                     <div className="grid grid-cols-2 gap-1.5">
                       <button
@@ -652,7 +664,7 @@ export function DocumentStudioModal({
                           setIsExportDropdownOpen(false);
                           handleExportSinglePage(pages[0], 0, 'jpg');
                         }}
-                        className="px-2 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white rounded-lg text-[10px] font-semibold text-center transition-colors cursor-pointer"
+                        className="px-2 py-1 bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-300 hover:text-zinc-900 dark:hover:text-white rounded-lg text-[10px] font-semibold text-center transition-colors cursor-pointer"
                         title="Erste Seite direkt als JPG herunterladen"
                       >
                         S. 1 als JPG
@@ -663,7 +675,7 @@ export function DocumentStudioModal({
                           setIsExportDropdownOpen(false);
                           handleExportSinglePage(pages[0], 0, 'png');
                         }}
-                        className="px-2 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white rounded-lg text-[10px] font-semibold text-center transition-colors cursor-pointer"
+                        className="px-2 py-1 bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-300 hover:text-zinc-900 dark:hover:text-white rounded-lg text-[10px] font-semibold text-center transition-colors cursor-pointer"
                         title="Erste Seite direkt als PNG herunterladen"
                       >
                         S. 1 als PNG
@@ -697,7 +709,7 @@ export function DocumentStudioModal({
           <button
             type="button"
             onClick={onClose}
-            className="p-1.5 text-zinc-400 hover:text-white rounded-lg hover:bg-zinc-800 transition-colors cursor-pointer"
+            className="p-1.5 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors cursor-pointer"
             title="Werkbank schließen"
           >
             <X className="w-5 h-5" />
@@ -750,12 +762,12 @@ export function DocumentStudioModal({
 
       {/* Einstellungen Drawer (wenn aufgeklappt) */}
       {showSettings && (
-        <div className="bg-zinc-900 border-b border-zinc-800 px-6 py-4 animate-in slide-in-from-top-2 duration-150">
+        <div className="bg-white dark:bg-zinc-900 border-b border-zinc-200 dark:border-zinc-800 px-6 py-4 animate-in slide-in-from-top-2 duration-150">
           <div className="max-w-5xl mx-auto grid grid-cols-1 md:grid-cols-3 gap-6 text-xs">
             {/* 1. Seitenzahlen */}
-            <div className="space-y-2 p-3 bg-zinc-950/60 rounded-xl border border-zinc-800">
+            <div className="space-y-2 p-3 bg-zinc-100/80 dark:bg-zinc-950/60 rounded-xl border border-zinc-200 dark:border-zinc-800">
               <div className="flex items-center justify-between">
-                <span className="font-semibold text-zinc-200 flex items-center gap-1.5">
+                <span className="font-semibold text-zinc-800 dark:text-zinc-200 flex items-center gap-1.5">
                   <Hash className="w-3.5 h-3.5 text-blue-400" />
                   Seitenzahlen
                 </span>
@@ -768,14 +780,14 @@ export function DocumentStudioModal({
                     }
                     className="sr-only peer"
                   />
-                  <div className="w-8 h-4 bg-zinc-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-blue-600"></div>
+                  <div className="w-8 h-4 bg-zinc-100 dark:bg-zinc-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-blue-600"></div>
                 </label>
               </div>
 
               {pageNumbering.enabled && (
-                <div className="space-y-2 pt-2 border-t border-zinc-800/80 text-[11px]">
+                <div className="space-y-2 pt-2 border-t border-zinc-200/80 dark:border-zinc-800/80 text-[11px]">
                   <div>
-                    <label className="text-zinc-400 block mb-1">Position:</label>
+                    <label className="text-zinc-500 dark:text-zinc-400 block mb-1">Position:</label>
                     <select
                       value={pageNumbering.position}
                       onChange={(e) =>
@@ -784,7 +796,7 @@ export function DocumentStudioModal({
                           position: e.target.value as any,
                         })
                       }
-                      className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-2 py-1 text-zinc-200"
+                      className="w-full bg-zinc-100 dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 rounded-lg px-2 py-1 text-zinc-800 dark:text-zinc-200"
                     >
                       <option value="bottom-center">Unten Mitte</option>
                       <option value="bottom-right">Unten Rechts</option>
@@ -794,7 +806,7 @@ export function DocumentStudioModal({
                     </select>
                   </div>
                   <div>
-                    <label className="text-zinc-400 block mb-1">Format:</label>
+                    <label className="text-zinc-500 dark:text-zinc-400 block mb-1">Format:</label>
                     <select
                       value={pageNumbering.format}
                       onChange={(e) =>
@@ -803,7 +815,7 @@ export function DocumentStudioModal({
                           format: e.target.value as any,
                         })
                       }
-                      className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-2 py-1 text-zinc-200"
+                      className="w-full bg-zinc-100 dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 rounded-lg px-2 py-1 text-zinc-800 dark:text-zinc-200"
                     >
                       <option value="page_x_of_y">Seite X von Y</option>
                       <option value="page_x">Seite X</option>
@@ -815,8 +827,8 @@ export function DocumentStudioModal({
             </div>
 
             {/* 2. Komprimierung */}
-            <div className="space-y-2 p-3 bg-zinc-950/60 rounded-xl border border-zinc-800">
-              <span className="font-semibold text-zinc-200 flex items-center gap-1.5">
+            <div className="space-y-2 p-3 bg-zinc-100/80 dark:bg-zinc-950/60 rounded-xl border border-zinc-200 dark:border-zinc-800">
+              <span className="font-semibold text-zinc-800 dark:text-zinc-200 flex items-center gap-1.5">
                 <Sliders className="w-3.5 h-3.5 text-emerald-400" />
                 Dateigröße & Komprimierung
               </span>
@@ -832,7 +844,7 @@ export function DocumentStudioModal({
                     className={`flex items-start gap-2 p-1.5 rounded-lg border cursor-pointer transition-colors ${
                       compression === opt.id
                         ? 'bg-blue-600/15 border-blue-500/50 text-white'
-                        : 'border-transparent text-zinc-400 hover:bg-zinc-800/60'
+                        : 'border-transparent text-zinc-500 dark:text-zinc-400 hover:bg-zinc-100/70 dark:hover:bg-zinc-800/60'
                     }`}
                   >
                     <input
@@ -843,7 +855,7 @@ export function DocumentStudioModal({
                       className="mt-0.5"
                     />
                     <div>
-                      <div className="font-medium text-zinc-200">{opt.label}</div>
+                      <div className="font-medium text-zinc-800 dark:text-zinc-200">{opt.label}</div>
                       <div className="text-[10px] text-zinc-500">{opt.sub}</div>
                     </div>
                   </label>
@@ -852,12 +864,12 @@ export function DocumentStudioModal({
             </div>
 
             {/* 3. Ziel in Scanny */}
-            <div className="space-y-2 p-3 bg-zinc-950/60 rounded-xl border border-zinc-800">
-              <span className="font-semibold text-zinc-200 flex items-center gap-1.5">
+            <div className="space-y-2 p-3 bg-zinc-100/80 dark:bg-zinc-950/60 rounded-xl border border-zinc-200 dark:border-zinc-800">
+              <span className="font-semibold text-zinc-800 dark:text-zinc-200 flex items-center gap-1.5">
                 <FolderIcon className="w-3.5 h-3.5 text-blue-400" />
                 Ziel bei Übergabe an Scanny
               </span>
-              <p className="text-[11px] text-zinc-400">
+              <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
                 Wählen Sie einen Ordner oder übergeben Sie das Dokument direkt an den Posteingang.
               </p>
               <select
@@ -865,7 +877,7 @@ export function DocumentStudioModal({
                 onChange={(e) =>
                   setSelectedFolderId(e.target.value === '' ? null : Number(e.target.value))
                 }
-                className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-2.5 py-1.5 text-zinc-200 text-xs mt-2"
+                className="w-full bg-zinc-100 dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 rounded-lg px-2.5 py-1.5 text-zinc-800 dark:text-zinc-200 text-xs mt-2"
               >
                 <option value="">Posteingang (Inbox - Automatisches Filing)</option>
                 {folders.map((f) => (
@@ -875,13 +887,13 @@ export function DocumentStudioModal({
                 ))}
               </select>
 
-              <div className="pt-3 border-t border-zinc-800/80">
+              <div className="pt-3 border-t border-zinc-200/80 dark:border-zinc-800/80">
                 <button
                   type="button"
                   onClick={() => handleAssemble('download', 'images_zip')}
-                  className="w-full py-1.5 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-lg text-[11px] font-medium text-zinc-300 hover:text-white flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                  className="w-full py-1.5 bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 border border-zinc-300 dark:border-zinc-700 rounded-lg text-[11px] font-medium text-zinc-700 dark:text-zinc-300 hover:text-zinc-900 dark:hover:text-white flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
                 >
-                  <Download className="w-3 h-3 text-zinc-400" />
+                  <Download className="w-3 h-3 text-zinc-500 dark:text-zinc-400" />
                   <span>Als Bilder-ZIP herunterladen</span>
                 </button>
               </div>
@@ -914,7 +926,7 @@ export function DocumentStudioModal({
             <button
               type="button"
               onClick={() => setExportSuccessMessage(null)}
-              className="p-1 text-emerald-400 hover:text-white cursor-pointer"
+              className="p-1 text-emerald-400 hover:text-zinc-900 dark:hover:text-white cursor-pointer"
             >
               <X className="w-3.5 h-3.5" />
             </button>
@@ -923,7 +935,7 @@ export function DocumentStudioModal({
       )}
 
       {errorMessage && (
-        <div className="bg-red-950/80 border-b border-red-800/80 px-6 py-2.5 flex items-center justify-between text-xs text-red-200">
+        <div className="bg-red-50 dark:bg-red-950/80 border-b border-red-200 dark:border-red-800/80 px-6 py-2.5 flex items-center justify-between text-xs text-red-800 dark:text-red-200">
           <div className="flex items-center gap-2">
             <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
             <span>{errorMessage}</span>
@@ -931,7 +943,7 @@ export function DocumentStudioModal({
           <button
             type="button"
             onClick={() => setErrorMessage(null)}
-            className="p-1 text-red-400 hover:text-white cursor-pointer"
+            className="p-1 text-red-400 hover:text-zinc-900 dark:hover:text-white cursor-pointer"
           >
             <X className="w-3.5 h-3.5" />
           </button>
@@ -941,15 +953,15 @@ export function DocumentStudioModal({
       {/* Hauptbereich: Die Seitenkacheln (Grid) */}
       <main className="flex-1 overflow-y-auto p-6">
         <div className="max-w-7xl mx-auto space-y-4">
-          <div className="flex items-center justify-between text-xs text-zinc-400 px-1">
+          <div className="flex items-center justify-between text-xs text-zinc-500 dark:text-zinc-400 px-1">
             <span className="flex items-center gap-2">
               <span>💡 Tipp:</span>
-              <span className="inline-flex items-center gap-1 text-zinc-300">
+              <span className="inline-flex items-center gap-1 text-zinc-700 dark:text-zinc-300">
                 <Move className="w-3 h-3 text-indigo-400" />
                 <span>Seiten per Drag & Drop verschieben</span>
               </span>
               <span>•</span>
-              <span className="inline-flex items-center gap-1 text-zinc-300">
+              <span className="inline-flex items-center gap-1 text-zinc-700 dark:text-zinc-300">
                 <RotateCw className="w-3 h-3 text-amber-400" />
                 <span>Mit 90° / 180° drehen</span>
               </span>
@@ -977,20 +989,20 @@ export function DocumentStudioModal({
                   onDragStart={() => handleDragStart(index)}
                   onDragOver={(e) => handleDragOver(e, index)}
                   onDrop={() => handleDrop(index)}
-                  className={`group relative bg-zinc-900 border rounded-2xl p-2.5 flex flex-col justify-between transition-all select-none shadow-sm ${
+                  className={`group relative bg-white dark:bg-zinc-900 border rounded-2xl p-2.5 flex flex-col justify-between transition-all select-none shadow-sm ${
                     isDragging ? 'opacity-40 scale-95 border-blue-500' : 'opacity-100'
                   } ${
-                    isOver ? 'border-blue-400 shadow-lg shadow-blue-500/20 scale-102' : 'border-zinc-800 hover:border-zinc-700'
+                    isOver ? 'border-blue-400 shadow-lg shadow-blue-500/20 scale-102' : 'border-zinc-200 dark:border-zinc-800 hover:border-zinc-300 dark:hover:border-zinc-700'
                   }`}
                 >
                   {/* Obere Leiste der Seite: Seitennummer, Drehungs-Status & Drehtasten */}
                   <div className="flex items-center justify-between mb-2 px-0.5">
                     <div className="flex items-center gap-1">
-                      <span className="text-[11px] font-mono font-bold px-2 py-0.5 rounded-md bg-zinc-800 text-zinc-200">
+                      <span className="text-[11px] font-mono font-bold px-2 py-0.5 rounded-md bg-zinc-100 dark:bg-zinc-800 text-zinc-800 dark:text-zinc-200">
                         Seite {index + 1}
                       </span>
                       <span
-                        className="text-zinc-500 hover:text-zinc-300 cursor-grab active:cursor-grabbing p-0.5"
+                        className="text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 cursor-grab active:cursor-grabbing p-0.5"
                         title="Mit gedrückter Maustaste verschieben (Drag & Drop)"
                       >
                         <Move className="w-3 h-3" />
@@ -999,7 +1011,7 @@ export function DocumentStudioModal({
 
                     {/* Rotation Badge wenn gedreht */}
                     {page.rotation !== 0 ? (
-                      <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-300 border border-blue-500/30">
+                      <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-700 dark:text-blue-300 border border-blue-500/30">
                         ↺ {page.rotation}°
                       </span>
                     ) : (
@@ -1007,11 +1019,11 @@ export function DocumentStudioModal({
                     )}
 
                     {/* Einzel-Dreh-Buttons mit intuitiven Tooltips */}
-                    <div className="flex items-center gap-0.5 bg-zinc-800/80 p-0.5 rounded-lg border border-zinc-700/60">
+                    <div className="flex items-center gap-0.5 bg-zinc-100/80 dark:bg-zinc-800/80 p-0.5 rounded-lg border border-zinc-300/70 dark:border-zinc-700/60">
                       <button
                         type="button"
                         onClick={() => handleRotatePage(index, -90)}
-                        className="p-1 hover:bg-zinc-700 text-zinc-400 hover:text-white rounded transition-colors cursor-pointer"
+                        className="p-1 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white rounded transition-colors cursor-pointer"
                         title="Diese Seite um 90° nach links drehen (↺)"
                       >
                         <RotateCcw className="w-3.5 h-3.5 text-blue-400" />
@@ -1019,7 +1031,7 @@ export function DocumentStudioModal({
                       <button
                         type="button"
                         onClick={() => handleRotatePage(index, 90)}
-                        className="p-1 hover:bg-zinc-700 text-zinc-400 hover:text-white rounded transition-colors cursor-pointer"
+                        className="p-1 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white rounded transition-colors cursor-pointer"
                         title="Diese Seite um 90° nach rechts drehen (↻)"
                       >
                         <RotateCw className="w-3.5 h-3.5 text-blue-400" />
@@ -1030,7 +1042,7 @@ export function DocumentStudioModal({
                   {/* Vorschaubild der Seite mit Drehungs-Transformation */}
                   <div
                     onClick={() => setZoomPage(page)}
-                    className="relative aspect-[3/4] bg-zinc-950 rounded-xl overflow-hidden flex items-center justify-center cursor-pointer border border-zinc-800/80 group-hover:border-zinc-700 transition-colors"
+                    className="relative aspect-[3/4] bg-zinc-100 dark:bg-zinc-950 rounded-xl overflow-hidden flex items-center justify-center cursor-pointer border border-zinc-200/80 dark:border-zinc-800/80 group-hover:border-zinc-400 dark:group-hover:border-zinc-700 transition-colors"
                   >
                     <img
                       src={page.thumbnailUrl}
@@ -1044,7 +1056,7 @@ export function DocumentStudioModal({
 
                     {/* Hover Zoom & Quick-Rotate Overlay */}
                     <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex flex-col items-center justify-between p-2 transition-opacity">
-                      <div className="p-1.5 bg-zinc-900/90 rounded-xl text-white shadow-lg flex items-center gap-1 text-[10px] font-semibold">
+                      <div className="p-1.5 bg-white/90 dark:bg-zinc-900/90 rounded-xl text-zinc-900 dark:text-white shadow-lg flex items-center gap-1 text-[10px] font-semibold">
                         <ZoomIn className="w-3.5 h-3.5" />
                         <span>Vergrößern</span>
                       </div>
@@ -1057,7 +1069,7 @@ export function DocumentStudioModal({
                               e.stopPropagation();
                               handleRotatePage(index, -90);
                             }}
-                            className="px-1.5 py-1 bg-zinc-900/95 hover:bg-zinc-800 text-zinc-200 rounded-lg text-[10px] font-semibold flex items-center gap-0.5 shadow-md border border-zinc-700 cursor-pointer"
+                            className="px-1.5 py-1 bg-white/95 dark:bg-zinc-900/95 hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-800 dark:text-zinc-200 rounded-lg text-[10px] font-semibold flex items-center gap-0.5 shadow-md border border-zinc-300 dark:border-zinc-700 cursor-pointer"
                             title="90° nach links drehen"
                           >
                             <RotateCcw className="w-3 h-3 text-blue-400" />
@@ -1069,7 +1081,7 @@ export function DocumentStudioModal({
                               e.stopPropagation();
                               handleRotatePage(index, 90);
                             }}
-                            className="px-1.5 py-1 bg-zinc-900/95 hover:bg-zinc-800 text-zinc-200 rounded-lg text-[10px] font-semibold flex items-center gap-0.5 shadow-md border border-zinc-700 cursor-pointer"
+                            className="px-1.5 py-1 bg-white/95 dark:bg-zinc-900/95 hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-800 dark:text-zinc-200 rounded-lg text-[10px] font-semibold flex items-center gap-0.5 shadow-md border border-zinc-300 dark:border-zinc-700 cursor-pointer"
                             title="90° nach rechts drehen"
                           >
                             <RotateCw className="w-3 h-3 text-blue-400" />
@@ -1085,7 +1097,7 @@ export function DocumentStudioModal({
                               e.stopPropagation();
                               handleExportSinglePage(page, index, 'jpg');
                             }}
-                            className="px-1.5 py-1 bg-emerald-950/90 hover:bg-emerald-900 text-emerald-300 rounded-lg text-[10px] font-bold shadow-md border border-emerald-700/80 cursor-pointer"
+                            className="px-1.5 py-1 bg-emerald-950/90 hover:bg-emerald-900 text-emerald-700 dark:text-emerald-300 rounded-lg text-[10px] font-bold shadow-md border border-emerald-700/80 cursor-pointer"
                             title="Diese Seite sofort als JPG herunterladen"
                           >
                             JPG
@@ -1096,7 +1108,7 @@ export function DocumentStudioModal({
                               e.stopPropagation();
                               handleExportSinglePage(page, index, 'png');
                             }}
-                            className="px-1.5 py-1 bg-blue-950/90 hover:bg-blue-900 text-blue-300 rounded-lg text-[10px] font-bold shadow-md border border-blue-700/80 cursor-pointer"
+                            className="px-1.5 py-1 bg-blue-950/90 hover:bg-blue-900 text-blue-700 dark:text-blue-300 rounded-lg text-[10px] font-bold shadow-md border border-blue-700/80 cursor-pointer"
                             title="Diese Seite sofort als PNG herunterladen"
                           >
                             PNG
@@ -1107,9 +1119,9 @@ export function DocumentStudioModal({
                   </div>
 
                   {/* Fußleiste der Karte: Dateiname & Aktionen */}
-                  <div className="mt-2.5 pt-2 border-t border-zinc-800/80 flex items-center justify-between text-xs">
+                  <div className="mt-2.5 pt-2 border-t border-zinc-200/80 dark:border-zinc-800/80 flex items-center justify-between text-xs">
                     <span
-                      className="text-[11px] text-zinc-400 truncate max-w-[80px]"
+                      className="text-[11px] text-zinc-500 dark:text-zinc-400 truncate max-w-[80px]"
                       title={page.sourceFileName}
                     >
                       {page.sourceFileName}
@@ -1124,7 +1136,7 @@ export function DocumentStudioModal({
                             e.stopPropagation();
                             setActiveCardExportMenu(activeCardExportMenu === index ? null : index);
                           }}
-                          className="p-1 hover:bg-zinc-800 text-zinc-400 hover:text-emerald-400 rounded cursor-pointer transition-colors"
+                          className="p-1 hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-500 dark:text-zinc-400 hover:text-emerald-400 rounded cursor-pointer transition-colors"
                           title="Seite exportieren (JPG, PNG, PDF)"
                         >
                           <Download className="w-3 h-3 text-emerald-400" />
@@ -1132,10 +1144,10 @@ export function DocumentStudioModal({
 
                         {activeCardExportMenu === index && (
                           <div
-                            className="absolute right-0 bottom-full mb-1.5 w-48 bg-zinc-900 border border-zinc-700 rounded-xl shadow-2xl p-1 z-50 text-left animate-in fade-in zoom-in-95 duration-100"
+                            className="absolute right-0 bottom-full mb-1.5 w-48 bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-xl shadow-2xl p-1 z-50 text-left animate-in fade-in zoom-in-95 duration-100"
                             onClick={(e) => e.stopPropagation()}
                           >
-                            <div className="px-2 py-1 text-[9px] font-bold uppercase tracking-wider text-zinc-400 border-b border-zinc-800">
+                            <div className="px-2 py-1 text-[9px] font-bold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 border-b border-zinc-200 dark:border-zinc-800">
                               Seite {index + 1} exportieren
                             </div>
                             <button
@@ -1144,7 +1156,7 @@ export function DocumentStudioModal({
                                 setActiveCardExportMenu(null);
                                 handleExportSinglePage(page, index, 'jpg');
                               }}
-                              className="w-full px-2 py-1.5 rounded-lg text-left text-[11px] font-medium text-zinc-200 hover:text-white hover:bg-zinc-800 flex items-center justify-between cursor-pointer"
+                              className="w-full px-2 py-1.5 rounded-lg text-left text-[11px] font-medium text-zinc-800 dark:text-zinc-200 hover:text-zinc-900 dark:hover:text-white hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center justify-between cursor-pointer"
                             >
                               <span>Als JPG (.jpg)</span>
                               <ImageIcon className="w-3 h-3 text-emerald-400" />
@@ -1155,7 +1167,7 @@ export function DocumentStudioModal({
                                 setActiveCardExportMenu(null);
                                 handleExportSinglePage(page, index, 'png');
                               }}
-                              className="w-full px-2 py-1.5 rounded-lg text-left text-[11px] font-medium text-zinc-200 hover:text-white hover:bg-zinc-800 flex items-center justify-between cursor-pointer"
+                              className="w-full px-2 py-1.5 rounded-lg text-left text-[11px] font-medium text-zinc-800 dark:text-zinc-200 hover:text-zinc-900 dark:hover:text-white hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center justify-between cursor-pointer"
                             >
                               <span>Als PNG (.png)</span>
                               <ImageIcon className="w-3 h-3 text-blue-400" />
@@ -1166,7 +1178,7 @@ export function DocumentStudioModal({
                                 setActiveCardExportMenu(null);
                                 handleExportSinglePage(page, index, 'pdf');
                               }}
-                              className="w-full px-2 py-1.5 rounded-lg text-left text-[11px] font-medium text-zinc-200 hover:text-white hover:bg-zinc-800 flex items-center justify-between cursor-pointer"
+                              className="w-full px-2 py-1.5 rounded-lg text-left text-[11px] font-medium text-zinc-800 dark:text-zinc-200 hover:text-zinc-900 dark:hover:text-white hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center justify-between cursor-pointer"
                             >
                               <span>Als PDF (.pdf)</span>
                               <FileText className="w-3 h-3 text-red-400" />
@@ -1180,7 +1192,7 @@ export function DocumentStudioModal({
                         type="button"
                         disabled={index === 0}
                         onClick={() => handleMovePage(index, index - 1)}
-                        className="p-1 hover:bg-zinc-800 text-zinc-400 hover:text-white rounded disabled:opacity-20 cursor-pointer transition-colors"
+                        className="p-1 hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white rounded disabled:opacity-20 cursor-pointer transition-colors"
                         title="Seite nach links schieben"
                       >
                         <MoveLeft className="w-3 h-3" />
@@ -1191,7 +1203,7 @@ export function DocumentStudioModal({
                         type="button"
                         disabled={index === pages.length - 1}
                         onClick={() => handleMovePage(index, index + 1)}
-                        className="p-1 hover:bg-zinc-800 text-zinc-400 hover:text-white rounded disabled:opacity-20 cursor-pointer transition-colors"
+                        className="p-1 hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white rounded disabled:opacity-20 cursor-pointer transition-colors"
                         title="Seite nach rechts schieben"
                       >
                         <MoveRight className="w-3 h-3" />
@@ -1201,7 +1213,7 @@ export function DocumentStudioModal({
                       <button
                         type="button"
                         onClick={() => handleDuplicatePage(index)}
-                        className="p-1 hover:bg-zinc-800 text-zinc-400 hover:text-white rounded cursor-pointer transition-colors"
+                        className="p-1 hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white rounded cursor-pointer transition-colors"
                         title="Seite duplizieren"
                       >
                         <Copy className="w-3 h-3" />
@@ -1211,7 +1223,7 @@ export function DocumentStudioModal({
                       <button
                         type="button"
                         onClick={() => handleDeletePage(index)}
-                        className="p-1 hover:bg-red-950/60 text-zinc-400 hover:text-red-400 rounded cursor-pointer transition-colors"
+                        className="p-1 hover:bg-red-950/60 text-zinc-500 dark:text-zinc-400 hover:text-red-400 rounded cursor-pointer transition-colors"
                         title="Seite entfernen"
                       >
                         <Trash2 className="w-3 h-3" />
@@ -1226,12 +1238,12 @@ export function DocumentStudioModal({
             {/* Kachel zum Hinzufügen weiterer Dateien / Ordner */}
             <div
               onClick={() => fileInputRef.current?.click()}
-              className="aspect-[3/4] border-2 border-dashed border-zinc-800 hover:border-zinc-700 bg-zinc-900/40 hover:bg-zinc-900 rounded-2xl flex flex-col items-center justify-center p-4 text-center cursor-pointer transition-all group"
+              className="aspect-[3/4] border-2 border-dashed border-zinc-200 dark:border-zinc-800 hover:border-zinc-300 dark:hover:border-zinc-700 bg-zinc-100/60 dark:bg-zinc-900/40 hover:bg-zinc-100 dark:hover:bg-zinc-900 rounded-2xl flex flex-col items-center justify-center p-4 text-center cursor-pointer transition-all group"
             >
-              <div className="w-10 h-10 rounded-xl bg-zinc-800 group-hover:bg-blue-600/20 text-zinc-400 group-hover:text-blue-400 border border-zinc-700 group-hover:border-blue-500/30 flex items-center justify-center mb-2 transition-colors">
+              <div className="w-10 h-10 rounded-xl bg-zinc-100 dark:bg-zinc-800 group-hover:bg-blue-600/20 text-zinc-500 dark:text-zinc-400 group-hover:text-blue-400 border border-zinc-300 dark:border-zinc-700 group-hover:border-blue-500/30 flex items-center justify-center mb-2 transition-colors">
                 <Plus className="w-5 h-5" />
               </div>
-              <p className="text-xs font-semibold text-zinc-300 group-hover:text-white">
+              <p className="text-xs font-semibold text-zinc-700 dark:text-zinc-300 group-hover:text-white">
                 Seiten anhängen
               </p>
               <p className="text-[10px] text-zinc-500 mt-1">PDF, Bilder oder Dokumente</p>
@@ -1247,24 +1259,25 @@ export function DocumentStudioModal({
           onClick={() => setZoomPage(null)}
         >
           <div
-            className="relative max-w-4xl max-h-[90vh] bg-zinc-900 border border-zinc-800 rounded-2xl p-4 flex flex-col shadow-2xl"
+            className="relative max-w-4xl max-h-[90vh] bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-4 flex flex-col shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex items-center justify-between pb-3 border-b border-zinc-800 text-xs">
+            <div className="flex items-center justify-between pb-3 border-b border-zinc-200 dark:border-zinc-800 text-xs">
               <div>
-                <span className="font-semibold text-white">{zoomPage.sourceFileName}</span>
-                <span className="text-zinc-400 ml-2">Original Seite {zoomPage.originalPageIndex + 1}</span>
+                <span className="font-semibold text-zinc-900 dark:text-white">{zoomPage.sourceFileName}</span>
+                <span className="text-zinc-500 dark:text-zinc-400 ml-2">Original Seite {zoomPage.originalPageIndex + 1}</span>
               </div>
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={() =>
-                    setZoomPage({
-                      ...zoomPage,
-                      rotation: ((zoomPage.rotation + 90) % 360 + 360) % 360,
-                    })
-                  }
-                  className="px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-lg text-xs flex items-center gap-1 cursor-pointer"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    // Drehung gilt für die Seite in der Werkbank (und damit für den Export), nicht nur für die Großansicht
+                    const rotation = ((zoomPage.rotation + 90) % 360 + 360) % 360;
+                    setPages((prev) => prev.map((p) => (p.id === zoomPage.id ? { ...p, rotation } : p)));
+                    setZoomPage({ ...zoomPage, rotation });
+                  }}
+                  className="px-2.5 py-1 bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-300 rounded-lg text-xs flex items-center gap-1 cursor-pointer"
                 >
                   <RotateCw className="w-3.5 h-3.5" />
                   <span>90° drehen</span>
@@ -1272,7 +1285,7 @@ export function DocumentStudioModal({
                 <button
                   type="button"
                   onClick={() => setZoomPage(null)}
-                  className="p-1 text-zinc-400 hover:text-white rounded-lg hover:bg-zinc-800 cursor-pointer"
+                  className="p-1 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800 cursor-pointer"
                 >
                   <X className="w-5 h-5" />
                 </button>

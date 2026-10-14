@@ -90,7 +90,7 @@ export function PdfOcrModal({ isOpen, onClose }: PdfOcrModalProps) {
           <button
             type="button"
             onClick={onClose}
-            className="p-1.5 text-zinc-400 hover:text-zinc-700 dark:hover:text-white rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800 cursor-pointer"
+            className="p-1.5 text-zinc-500 dark:text-zinc-400 hover:text-zinc-700 dark:hover:text-white rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800 cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
@@ -107,7 +107,7 @@ export function PdfOcrModal({ isOpen, onClose }: PdfOcrModalProps) {
           <div className="space-y-4">
             {!file ? (
               <label className="border-2 border-dashed border-zinc-300 dark:border-zinc-700 hover:border-zinc-400 dark:hover:border-zinc-500 rounded-2xl p-8 flex flex-col items-center justify-center cursor-pointer transition-colors bg-zinc-50/70 dark:bg-zinc-950/40">
-                <Upload className="w-8 h-8 text-zinc-400 mb-2" />
+                <Upload className="w-8 h-8 text-zinc-500 dark:text-zinc-400 mb-2" />
                 <span className="text-xs font-semibold text-zinc-700 dark:text-zinc-200">Dokument oder Bild auswählen</span>
                 <span className="text-[11px] text-zinc-500 mt-0.5">Unterstützt PDF, JPG, PNG, WEBP</span>
                 <input

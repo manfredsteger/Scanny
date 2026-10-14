@@ -900,6 +900,156 @@ toolsRouter.post(
 );
 
 // -------------------------------------------------------------
+// Schwärzen (Werkzeug: der Nutzer markiert Bereiche von Hand)
+// POST /api/tools/redact/prepare   PDF hochladen → Seitenbilder zum Markieren
+// POST /api/tools/redact/apply     { token, boxes } → Inhalt unter den Markierungen ENTFERNEN
+// GET  /api/tools/redact/:token/download
+// POST /api/tools/redact/:token/to-scanny { title }
+// Die eigentliche Arbeit macht server/pipeline/redact.py (Seiten rastern, OCR, Prüfung).
+// -------------------------------------------------------------
+const REDACT_PY_PATH = path.join(path.dirname(TEXTPDF_PY_PATH), 'redact.py');
+
+async function renderAllPages(pdfPath: string, dir: string, prefix: string, dpi = 100): Promise<string[]> {
+  await execFileAsync(
+    'gs',
+    ['-q', '-dNOPAUSE', '-dBATCH', '-sDEVICE=jpeg', '-dJPEGQ=85', `-r${dpi}`,
+      `-sOutputFile=${path.join(dir, `${prefix}_%d.jpg`)}`, pdfPath],
+    { timeout: 120000 }
+  );
+  return fs
+    .readdirSync(dir)
+    .filter((f) => f.startsWith(`${prefix}_`) && f.endsWith('.jpg'))
+    .sort((a, b) => parseInt(a.slice(prefix.length + 1), 10) - parseInt(b.slice(prefix.length + 1), 10));
+}
+
+toolsRouter.post('/tools/redact/prepare', upload.single('file'), async (req: Request, res: Response) => {
+  const file = req.file;
+  try {
+    if (!file) return res.status(400).json({ error: 'Keine PDF-Datei übermittelt.' });
+    const name = fixOriginalName(file.originalname);
+    if (path.extname(name).toLowerCase() !== '.pdf') {
+      return res.status(400).json({ error: 'Schwärzen funktioniert mit PDF-Dateien.' });
+    }
+    const token = `red_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const dir = path.join(toolsSessionsDir, token);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.renameSync(file.path, path.join(dir, 'eingang.pdf'));
+    fs.writeFileSync(path.join(dir, 'name.txt'), name);
+
+    const images = await renderAllPages(path.join(dir, 'eingang.pdf'), dir, 'seite');
+    const pages = await Promise.all(
+      images.map(async (img, index) => {
+        const meta = await sharp(path.join(dir, img)).metadata();
+        return { index, url: `/api/tools/thumb/${token}/${img}`, width: meta.width || 0, height: meta.height || 0 };
+      })
+    );
+    res.json({ token, name, pages });
+  } catch (err: any) {
+    console.error('[Tools] Schwärzen vorbereiten fehlgeschlagen:', err);
+    res.status(500).json({ error: 'Das PDF konnte nicht geöffnet werden (beschädigt oder passwortgeschützt?).' });
+  } finally {
+    try {
+      if (file && fs.existsSync(file.path)) fs.unlinkSync(file.path);
+    } catch {}
+  }
+});
+
+toolsRouter.post('/tools/redact/apply', async (req: Request, res: Response) => {
+  try {
+    const { token, boxes } = req.body || {};
+    const dir = typeof token === 'string' ? safeJoin(toolsSessionsDir, token) : null;
+    if (!dir || !token.startsWith('red_') || !fs.existsSync(path.join(dir, 'eingang.pdf'))) {
+      return res.status(404).json({ error: 'Sitzung abgelaufen – bitte das PDF erneut wählen.' });
+    }
+    const clean = (Array.isArray(boxes) ? boxes : [])
+      .map((b: any) => ({ page: Number(b.page), x: Number(b.x), y: Number(b.y), w: Number(b.w), h: Number(b.h) }))
+      .filter((b) => [b.page, b.x, b.y, b.w, b.h].every(Number.isFinite) && b.w > 0 && b.h > 0)
+      .map((b) => ({
+        page: Math.trunc(b.page),
+        x: Math.min(Math.max(b.x, 0), 1),
+        y: Math.min(Math.max(b.y, 0), 1),
+        w: Math.min(b.w, 1),
+        h: Math.min(b.h, 1),
+      }));
+    if (clean.length === 0) return res.status(400).json({ error: 'Bitte zuerst mindestens einen Bereich markieren.' });
+
+    fs.writeFileSync(path.join(dir, 'boxen.json'), JSON.stringify(clean));
+    const out = path.join(dir, 'geschwaerzt.pdf');
+    let report: any;
+    try {
+      const { stdout } = await execFileAsync('python3', [REDACT_PY_PATH, path.join(dir, 'eingang.pdf'), out, path.join(dir, 'boxen.json')], {
+        timeout: 900000,
+        maxBuffer: 5 * 1024 * 1024,
+      });
+      report = JSON.parse(stdout.trim().split('\n').pop() || '{}');
+    } catch (err: any) {
+      const last = String(err?.stdout || '').trim().split('\n').pop() || '';
+      try {
+        report = JSON.parse(last);
+      } catch {
+        report = { ok: false, error: err?.message };
+      }
+    }
+    if (!report?.ok || !fs.existsSync(out)) {
+      return res.status(500).json({ error: `Schwärzen fehlgeschlagen: ${report?.error || 'unbekannter Fehler'}` });
+    }
+
+    // Vorschau der geschwärzten Seiten (so wie sie jetzt im PDF stehen)
+    for (const f of fs.readdirSync(dir)) if (f.startsWith('ergebnis_')) fs.unlinkSync(path.join(dir, f));
+    const images = await renderAllPages(out, dir, 'ergebnis');
+    const previews = (report.pages as number[]).map((pageNo) => ({
+      page: pageNo,
+      url: images[pageNo - 1] ? `/api/tools/thumb/${token}/${images[pageNo - 1]}?v=${Date.now()}` : null,
+    }));
+    const name = fs.readFileSync(path.join(dir, 'name.txt'), 'utf8');
+    console.log(`[Tools] Geschwärzt: ${name}, Seiten ${report.pages.join(', ')}, ${report.removedWords} Wörter entfernt, Lecks: ${report.leaked.length}`);
+    res.json({
+      ...report,
+      previews,
+      downloadUrl: `/api/tools/redact/${token}/download`,
+      fileName: `${path.parse(name).name}_geschwärzt.pdf`,
+    });
+  } catch (err: any) {
+    console.error('[Tools] Schwärzen fehlgeschlagen:', err);
+    res.status(500).json({ error: err?.message || 'Schwärzen fehlgeschlagen.' });
+  }
+});
+
+toolsRouter.get('/tools/redact/:token/download', (req: Request, res: Response) => {
+  const dir = safeJoin(toolsSessionsDir, req.params.token);
+  const out = dir ? path.join(dir, 'geschwaerzt.pdf') : null;
+  if (!out || !req.params.token.startsWith('red_') || !fs.existsSync(out)) {
+    return res.status(404).json({ error: 'Datei nicht gefunden oder abgelaufen.' });
+  }
+  const name = fs.readFileSync(path.join(dir!, 'name.txt'), 'utf8');
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', attachment(`${path.parse(name).name}_geschwärzt.pdf`));
+  fs.createReadStream(out).pipe(res);
+});
+
+toolsRouter.post('/tools/redact/:token/to-scanny', async (req: Request, res: Response) => {
+  try {
+    const dir = safeJoin(toolsSessionsDir, req.params.token);
+    const out = dir ? path.join(dir, 'geschwaerzt.pdf') : null;
+    if (!out || !req.params.token.startsWith('red_') || !fs.existsSync(out)) {
+      return res.status(404).json({ error: 'Datei nicht gefunden oder abgelaufen.' });
+    }
+    const name = fs.readFileSync(path.join(dir!, 'name.txt'), 'utf8');
+    const copy = path.join(paths.tmpDir, `geschwaerzt_${Date.now()}.pdf`);
+    fs.copyFileSync(out, copy);
+    const docId = await ingestFile({
+      sourcePath: copy,
+      source: 'upload',
+      originalName: `${path.parse(name).name} (geschwärzt).pdf`,
+      clientLastModified: Date.now(),
+    });
+    res.status(201).json({ ok: true, docId });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Übergabe an Scanny fehlgeschlagen.' });
+  }
+});
+
+// -------------------------------------------------------------
 // GET /api/tools/download-tmp/:filename
 // Download von temporären Ergebnisdateien
 // -------------------------------------------------------------

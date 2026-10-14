@@ -324,8 +324,18 @@ Archiv/<Ordner | _Eingang | _Papierkorb>/
 - **Text erkennen**: Textebene per pdfminer, nur bei leerer Textebene echte OCR (ocrmypdf `--skip-text`,
   `-l deu`); Bilder/HEIC per Tesseract `-l deu`. Leeres Ergebnis wird im Dialog als Fehler gezeigt.
 - **Komprimieren** liefert bei fehlender Verkleinerung das Original und `improved: false`.
-- **Entfernt**: „PDF zensieren“ (malte nur Rechtecke über den Text – Inhalt blieb auslesbar) und Attrappen
-  ohne Funktion (Passwort, Kommentieren, Word/Excel/PowerPoint-Umwandlungen, „Leeres PDF“).
+- **Bereiche schwärzen** (Werkzeug, der Nutzer markiert von Hand – Scanny schwärzt NIE automatisch):
+  `/tools/redact/prepare` rendert Seitenbilder, markiert wird auf diesen Bildern in Anteilen (0..1) der
+  angezeigten Seite; `/tools/redact/apply` ruft `server/pipeline/redact.py`: markierte Seiten werden mit 200 dpi
+  gerastert, Flächen eingebrannt, Seite ersetzt (Text/Vektoren/Anmerkungen weg), danach `ocrmypdf --skip-text
+  --rotate-pages` nur für diese Seiten, Metadaten geleert. Selbstprüfung: Wörter, die NUR unter Markierungen
+  standen, dürfen im Ergebnis nicht mehr vorkommen (Vergleich ohne Leerzeichen, weil pdfminer bei gedrehten
+  Seiten Wörter zusammenklebt; Positionen über pdfminers bereits gedrehtes Layout). Getestet für /Rotate
+  0/90/180/270. Einschränkung: Seiten, die auf dem Kopf ANGEZEIGT werden, verlieren ggf. die Durchsuchbarkeit
+  des Rests (Schwärzung bleibt sicher). Die erste AI-Studio-Fassung malte nur Rechtecke über den Text.
+- **Entfernt**: Attrappen ohne Funktion (Passwort, Kommentieren, Word/Excel/PowerPoint-Umwandlungen, „Leeres PDF“).
+- **Hell/Dunkel**: Werkbank und Tool-Dialoge waren fest dunkel; jede neutrale Farbklasse hat jetzt ein helles
+  Gegenstück + `dark:`. Bei neuen Klassen in mehrzeiligen Template-Strings daran denken.
 - **Sicherheit**: `safeJoin()` für alle Pfade aus URL/Body (Path-Traversal war möglich, Port ist im LAN offen).
 - **Temp** (`System/Cache/Temp`): Uploads werden nach Gebrauch gelöscht, Ergebnisse nach dem Ausliefern;
   `cleanupToolsTemp()` räumt beim Start und stündlich alles älter als 3 h weg (sonst sensible Inhalte im Backup).
