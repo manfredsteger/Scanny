@@ -17,6 +17,7 @@ import {
   FolderInput,
   Layers,
   Trash2,
+  Download,
   X,
 } from 'lucide-react';
 import { Folder, ScannyDocument, SystemPaths, formatDocumentType, suggestFolderId } from '../types';
@@ -116,6 +117,35 @@ export function InboxView({
       setBusy(false);
     }
   };
+  // Archiv-PDFs der Auswahl herunterladen – je Beleg ein Link-Klick mit kurzer Pause,
+  // sonst verwirft der Browser Downloads (wie im ExportDialog)
+  const downloadDocuments = async (docs: ScannyDocument[]) => {
+    const withPdf = docs.filter((d) => d.pdf_path);
+    if (withPdf.length === 0) {
+      flash('Für die Auswahl gibt es noch kein PDF.');
+      return;
+    }
+    setBusy(true);
+    try {
+      for (let i = 0; i < withPdf.length; i++) {
+        const a = window.document.createElement('a');
+        a.href = `/api/documents/${withPdf[i].id}/pdf?download=1`;
+        a.download = '';
+        window.document.body.appendChild(a);
+        a.click();
+        a.remove();
+        if (i < withPdf.length - 1) await new Promise((r) => setTimeout(r, 900));
+      }
+      const skipped = docs.length - withPdf.length;
+      flash(
+        `${withPdf.length} ${withPdf.length === 1 ? 'PDF' : 'PDFs'} heruntergeladen.` +
+          (skipped > 0 ? ` ${skipped} ohne PDF übersprungen.` : '')
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
   // Auswahl in den Papierkorb (30 Tage wiederherstellbar, daher ohne Rückfrage wie die Entf-Taste)
   const trashDocuments = async (ids: number[]) => {
     setBusy(true);
@@ -423,6 +453,17 @@ export function InboxView({
               >
                 <Layers className="w-3.5 h-3.5" />
                 Zu einem Dokument zusammenfügen
+              </button>
+              <button
+                type="button"
+                id="inbox-bulk-download-btn"
+                disabled={busy || !selectedList.some((d) => d.pdf_path)}
+                onClick={() => downloadDocuments(selectedList)}
+                className="px-3 py-1.5 rounded-lg border border-blue-300 dark:border-blue-800 bg-white dark:bg-zinc-900 text-blue-700 dark:text-blue-300 font-semibold flex items-center gap-1.5 hover:bg-blue-100 dark:hover:bg-blue-900/50 transition-colors disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed"
+                title="PDFs der gewählten Belege herunterladen"
+              >
+                <Download className="w-3.5 h-3.5" />
+                Herunterladen
               </button>
               <button
                 type="button"

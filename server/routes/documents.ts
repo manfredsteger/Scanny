@@ -465,8 +465,11 @@ documentsRouter.get('/documents/:id/pdf', (req: Request, res: Response) => {
     const encodedFilename = encodeURIComponent(filename).replace(/['()]/g, escape).replace(/\*/g, '%2A');
     const asciiFallback = filename.replace(/[^\x20-\x7E]/g, '_');
 
+    // ?download=1 → speichern statt im Browser anzeigen (Download-Knopf im Eingang)
+    const disposition = req.query.download === '1' ? 'attachment' : 'inline';
+
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `inline; filename="${asciiFallback}"; filename*=UTF-8''${encodedFilename}`);
+    res.setHeader('Content-Disposition', `${disposition}; filename="${asciiFallback}"; filename*=UTF-8''${encodedFilename}`);
     res.setHeader('Cache-Control', 'no-cache');
     res.sendFile(doc.pdf_path);
   } catch (error: any) {
