@@ -311,3 +311,24 @@ Archiv/<Ordner | _Eingang | _Papierkorb>/
   `/pages` gibt die Dateinamen der Teile mit.
 - **FALLE (behoben):** macOS unterscheidet Groß-/Kleinschreibung in Dateinamen nicht → `reserveBase()`
   vergleicht eigene Pfade case-insensitiv, sonst wurde aus „stapeltest“ → „Stapeltest“ ein „(2)“.
+
+---
+
+## 12. Tools-Ansicht (AI Studio 378aa76, nachgearbeitet 2026-10-14)
+
+- **Werkbank** (`/api/tools/prepare-session` → `assemble`/`export-single-page`): kennt nur PDF- und Bildseiten.
+  Textdateien werden schon beim Einlesen mit `textpdf.py` vollständig gesetzt, HEIC per `heif-convert`
+  umgewandelt (sharp kann hier kein HEIC). Office-Dateien werden mit Begründung abgelehnt (`skipped`),
+  versteckte Dateien übersprungen. `sessionId` im Formular hängt an eine bestehende Sitzung an
+  (Seitenschlüssel bleiben eindeutig). Server-Pfade gehen nicht an den Browser.
+- **Text erkennen**: Textebene per pdfminer, nur bei leerer Textebene echte OCR (ocrmypdf `--skip-text`,
+  `-l deu`); Bilder/HEIC per Tesseract `-l deu`. Leeres Ergebnis wird im Dialog als Fehler gezeigt.
+- **Komprimieren** liefert bei fehlender Verkleinerung das Original und `improved: false`.
+- **Entfernt**: „PDF zensieren“ (malte nur Rechtecke über den Text – Inhalt blieb auslesbar) und Attrappen
+  ohne Funktion (Passwort, Kommentieren, Word/Excel/PowerPoint-Umwandlungen, „Leeres PDF“).
+- **Sicherheit**: `safeJoin()` für alle Pfade aus URL/Body (Path-Traversal war möglich, Port ist im LAN offen).
+- **Temp** (`System/Cache/Temp`): Uploads werden nach Gebrauch gelöscht, Ergebnisse nach dem Ausliefern;
+  `cleanupToolsTemp()` räumt beim Start und stündlich alles älter als 3 h weg (sonst sensible Inhalte im Backup).
+- **Globaler Drop-Handler** (`App.tsx`) lädt in der Tools-Ansicht NICHT in den Eingang hoch.
+- **FALLE AI Studio**: 378aa76 entstand auf veraltetem Stand und drehte fce6fb6 (Ordner-Drop) zurück, ohne
+  Konflikt beim Rebase. Nach jedem AI-Studio-Push: eigene Commits seit dem letzten Abgleich zeilenweise prüfen.

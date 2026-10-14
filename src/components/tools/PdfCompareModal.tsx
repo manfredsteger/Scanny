@@ -18,6 +18,9 @@ export function PdfCompareModal({ isOpen, onClose }: PdfCompareModalProps) {
     const file = e.target.files?.[0];
     if (!file) return;
     const url = URL.createObjectURL(file);
+    // Vorherige Vorschau freigeben, sonst bleibt jede gewählte Datei im Speicher
+    const previous = side === 1 ? file1Url : file2Url;
+    if (previous) URL.revokeObjectURL(previous);
     if (side === 1) {
       setFile1Url(url);
       setFile1Name(file.name);

@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { readJson } from '../../apiJson';
 import { X, ScanText, Upload, Copy, Check, Download, AlertCircle, Loader2 } from 'lucide-react';
 
 interface PdfOcrModalProps {
@@ -31,12 +32,14 @@ export function PdfOcrModal({ isOpen, onClose }: PdfOcrModalProps) {
         body: formData,
       });
 
+      const data = await readJson(res);
       if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || 'Fehler bei der Texterkennung.');
+        throw new Error(data.error || 'Fehler bei der Texterkennung.');
       }
-
-      const data = await res.json();
+      if (!data.text || !data.text.trim()) {
+        // Sonst bliebe die Ansicht einfach unverändert – als wäre nichts passiert
+        throw new Error('In dieser Datei wurde kein Text gefunden (auch nicht per Texterkennung).');
+      }
       setExtractedText(data.text);
       setCharCount(data.characterCount || data.text.length);
     } catch (err: any) {
@@ -46,11 +49,15 @@ export function PdfOcrModal({ isOpen, onClose }: PdfOcrModalProps) {
     }
   };
 
-  const handleCopy = () => {
+  const handleCopy = async () => {
     if (!extractedText) return;
-    navigator.clipboard.writeText(extractedText);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    try {
+      await navigator.clipboard.writeText(extractedText);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      setError('Kopieren nicht möglich – bitte den Text markieren und mit ⌘C kopieren.');
+    }
   };
 
   const handleDownloadTxt = () => {

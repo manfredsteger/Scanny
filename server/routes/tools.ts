@@ -10,6 +10,9 @@ import { PDFDocument, rgb, degrees, StandardFonts } from 'pdf-lib';
 import { getDb, paths } from '../db.js';
 import { ingestFile } from '../pipeline/ingest.js';
 import { documentQueue } from '../pipeline/queue.js';
+import { decodeText } from '../pipeline/fileTypes.js';
+import { extractPdfText } from '../pipeline/ocr.js';
+import { TEXTPDF_PY_PATH } from '../pipeline/processDocument.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -92,6 +95,50 @@ function safeJoin(baseDir: string, ...segments: string[]): string | null {
   return resolved.startsWith(path.resolve(baseDir) + path.sep) ? resolved : null;
 }
 
+/** Content-Disposition mit korrektem UTF-8-Dateinamen (sonst kommt "Rechnung%20M%C3%BCller.pdf" an). */
+function attachment(name: string): string {
+  const ascii = name.replace(/[^\x20-\x7E]/g, '_').replace(/["\\]/g, '_');
+  return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`;
+}
+
+/** Datei nach dem Ausliefern löschen (Ergebnisse enthalten oft sensible Belege). */
+function removeAfter(res: Response, ...files: string[]): void {
+  res.on('close', () => {
+    for (const f of files) {
+      try {
+        if (fs.existsSync(f)) fs.rmSync(f, { recursive: true, force: true });
+      } catch {}
+    }
+  });
+}
+
+/**
+ * Aufräumen: Tool-Sitzungen und Zwischenergebnisse im Temp-Ordner älter als 3 Stunden löschen.
+ * Läuft beim Start und stündlich – Temp liegt unter System/ und wandert sonst ins Backup.
+ */
+const TEMP_MAX_AGE_MS = 3 * 60 * 60 * 1000;
+export function cleanupToolsTemp(): number {
+  let removed = 0;
+  const now = Date.now();
+  for (const dir of [paths.tmpDir, toolsSessionsDir]) {
+    if (!fs.existsSync(dir)) continue;
+    for (const entry of fs.readdirSync(dir)) {
+      const full = path.join(dir, entry);
+      if (full === toolsSessionsDir) continue;
+      try {
+        if (now - fs.statSync(full).mtimeMs > TEMP_MAX_AGE_MS) {
+          fs.rmSync(full, { recursive: true, force: true });
+          removed++;
+        }
+      } catch {}
+    }
+  }
+  if (removed > 0) console.log(`[Tools] ${removed} alte Temp-Einträge aufgeräumt.`);
+  return removed;
+}
+cleanupToolsTemp();
+setInterval(cleanupToolsTemp, 60 * 60 * 1000).unref?.();
+
 interface SessionPageMeta {
   id: string;
   sourceFileName: string;
@@ -110,203 +157,151 @@ interface SessionPageMeta {
 }
 
 // -------------------------------------------------------------
-// POST /api/tools/prepare-session
-// Ganzen Ordner oder beliebige Dateien hochladen & Seiten extrahieren
+// POST /api/tools/prepare-session  (Feld "sessionId" optional: an bestehende Sitzung anhängen)
+// Dateien hochladen & Seiten extrahieren. Damit die Werkbank nur zwei Seitenarten kennt (PDF, Bild),
+// werden Textdateien hier vollständig mit textpdf.py gesetzt und HEIC in JPG umgewandelt.
 // -------------------------------------------------------------
+const STUDIO_IMAGE_EXT = new Set(['.jpg', '.jpeg', '.png', '.webp', '.tiff', '.tif', '.bmp', '.gif']);
+const STUDIO_TEXT_EXT = new Set(['.txt', '.md', '.markdown', '.csv', '.log']);
+
+async function renderPdfThumb(pdfPath: string, pageIndex: number, thumbPath: string): Promise<void> {
+  try {
+    await execFileAsync(
+      'gs',
+      ['-q', '-dNOPAUSE', '-dBATCH', '-sDEVICE=jpeg', '-dJPEGQ=85', '-r100',
+        `-dFirstPage=${pageIndex + 1}`, `-dLastPage=${pageIndex + 1}`, `-sOutputFile=${thumbPath}`, pdfPath],
+      { timeout: 30000 }
+    );
+  } catch {
+    const svg = `<svg width="400" height="560" xmlns="http://www.w3.org/2000/svg"><rect width="100%" height="100%" fill="#ffffff" stroke="#e2e8f0" stroke-width="2"/><text x="50%" y="50%" text-anchor="middle" font-family="sans-serif" font-size="20" fill="#64748b">Seite ${pageIndex + 1}</text></svg>`;
+    await sharp(Buffer.from(svg)).jpeg().toFile(thumbPath);
+  }
+}
+
 toolsRouter.post(
   '/tools/prepare-session',
   upload.array('files', 200),
   async (req: Request, res: Response) => {
+    const files = (req.files as Express.Multer.File[]) || [];
     try {
-      const files = req.files as Express.Multer.File[];
-      if (!files || files.length === 0) {
+      if (files.length === 0) {
         return res.status(400).json({ error: 'Keine Dateien hochgeladen.' });
       }
 
-      const sessionId = `sess_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      // Bestehende Sitzung fortsetzen (Seiten anhängen) oder neue anlegen
+      const requested = typeof req.body?.sessionId === 'string' ? req.body.sessionId : '';
+      const existingPath = requested ? safeJoin(toolsSessionsDir, requested) : null;
+      const existingManifest =
+        existingPath && fs.existsSync(path.join(existingPath, 'manifest.json'))
+          ? JSON.parse(fs.readFileSync(path.join(existingPath, 'manifest.json'), 'utf8'))
+          : null;
+      const sessionId = existingManifest ? requested : `sess_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
       const sessionPath = path.join(toolsSessionsDir, sessionId);
       fs.mkdirSync(sessionPath, { recursive: true });
 
-      const allPages: SessionPageMeta[] = [];
-      let globalDisplayNum = 1;
+      const previous: SessionPageMeta[] = existingManifest?.pages || [];
+      const fileOffset: number = existingManifest?.fileCount || 0;
+      const newPages: SessionPageMeta[] = [];
+      const skipped: { name: string; reason: string }[] = [];
+      let displayNum = previous.length + 1;
 
-      for (let fIdx = 0; fIdx < files.length; fIdx++) {
-        const file = files[fIdx];
+      const addPdfPages = async (pdfPath: string, fileIdx: number, fileName: string, fileSize: number) => {
+        const pdfDoc = await PDFDocument.load(fs.readFileSync(pdfPath), { ignoreEncryption: true });
+        for (let p = 0; p < pdfDoc.getPageCount(); p++) {
+          const { width, height } = pdfDoc.getPage(p).getSize();
+          const pageKey = `p_${fileIdx}_${p}`;
+          await renderPdfThumb(pdfPath, p, path.join(sessionPath, `${pageKey}.jpg`));
+          newPages.push({
+            id: `${sessionId}_${pageKey}`, sourceFileName: fileName, sourceType: 'pdf', originalPageIndex: p,
+            displayNumber: displayNum++, rotation: 0, thumbnailUrl: `/api/tools/thumb/${sessionId}/${pageKey}.jpg`,
+            width: Math.round(width), height: Math.round(height), sessionId, pageKey, sourceFilePath: pdfPath, fileSize,
+          });
+        }
+      };
+
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const fileIdx = fileOffset + i;
         const fixedName = fixOriginalName(file.originalname);
         const ext = path.extname(fixedName).toLowerCase() || path.extname(file.originalname).toLowerCase();
-        const stat = fs.existsSync(file.path) ? fs.statSync(file.path) : null;
-        const fileSize = stat ? stat.size : 0;
-
-        // 1. PDF-Dateien
-        if (ext === '.pdf') {
-          try {
-            const pdfBytes = fs.readFileSync(file.path);
-            const pdfDoc = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
-            const pageCount = pdfDoc.getPageCount();
-
-            for (let p = 0; p < pageCount; p++) {
-              const page = pdfDoc.getPage(p);
-              const { width, height } = page.getSize();
-              const pageKey = `p_${fIdx}_${p}`;
-              const thumbFilename = `${pageKey}.jpg`;
-              const thumbPath = path.join(sessionPath, thumbFilename);
-
-              // Thumbnail via Ghostscript rendern (DPI 100 für scharfe, schnelle Vorschau)
-              try {
-                await execFileAsync(
-                  'gs',
-                  [
-                    '-q',
-                    '-dNOPAUSE',
-                    '-dBATCH',
-                    '-sDEVICE=jpeg',
-                    '-dJPEGQ=85',
-                    '-r100',
-                    `-dFirstPage=${p + 1}`,
-                    `-dLastPage=${p + 1}`,
-                    `-sOutputFile=${thumbPath}`,
-                    file.path,
-                  ],
-                  { timeout: 30000 }
-                );
-              } catch (gsErr) {
-                // Fallback: Generiere SVG-Vorschaubild wenn GS fehlschlägt
-                const svg = `<svg width="400" height="560" xmlns="http://www.w3.org/2000/svg">
-                  <rect width="100%" height="100%" fill="#ffffff" stroke="#e2e8f0" stroke-width="2"/>
-                  <text x="50%" y="45%" text-anchor="middle" font-family="sans-serif" font-size="28" fill="#ef4444" font-weight="bold">PDF</text>
-                  <text x="50%" y="55%" text-anchor="middle" font-family="sans-serif" font-size="16" fill="#64748b">Seite ${p + 1}</text>
-                </svg>`;
-                await sharp(Buffer.from(svg)).jpeg().toFile(thumbPath);
-              }
-
-              allPages.push({
-                id: `${sessionId}_${pageKey}`,
-                sourceFileName: fixedName,
-                sourceType: 'pdf',
-                originalPageIndex: p,
-                displayNumber: globalDisplayNum++,
-                rotation: 0,
-                thumbnailUrl: `/api/tools/thumb/${sessionId}/${thumbFilename}`,
-                width: Math.round(width),
-                height: Math.round(height),
-                sessionId,
-                pageKey,
-                sourceFilePath: file.path,
-                fileSize,
-              });
-            }
-          } catch (pdfErr) {
-            console.error(`[Tools] Fehler beim Parsen von PDF ${fixedName}:`, pdfErr);
+        const fileSize = fs.existsSync(file.path) ? fs.statSync(file.path).size : 0;
+        // Quelle in den Sitzungsordner: wird mit der Sitzung aufgeräumt
+        const stored = path.join(sessionPath, `src_${fileIdx}${ext}`);
+        try {
+          if (path.basename(fixedName).startsWith('.')) {
+            continue; // .DS_Store, ._Datei – macOS-Beiwerk, keine Dokumente
           }
-        }
-        // 2. Bildformate (JPG, PNG, WEBP, TIFF, HEIC, GIF, SVG)
-        else if (['.jpg', '.jpeg', '.png', '.webp', '.heic', '.heif', '.tiff', '.tif', '.bmp', '.gif', '.svg'].includes(ext)) {
-          try {
-            const pageKey = `p_${fIdx}_0`;
-            const thumbFilename = `${pageKey}.jpg`;
-            const thumbPath = path.join(sessionPath, thumbFilename);
+          fs.renameSync(file.path, stored);
 
-            const imgMeta = await sharp(file.path).metadata();
-            const w = imgMeta.width || 800;
-            const h = imgMeta.height || 1100;
-
-            // Thumbnail auf max 700px skalieren
-            await sharp(file.path)
-              .rotate() // Automatische EXIF-Drehung
+          if (ext === '.pdf') {
+            await addPdfPages(stored, fileIdx, fixedName, fileSize);
+          } else if (ext === '.heic' || ext === '.heif' || STUDIO_IMAGE_EXT.has(ext)) {
+            let imagePath = stored;
+            if (ext === '.heic' || ext === '.heif') {
+              // sharp kann hier kein HEIC lesen → wie in der Pipeline über heif-convert
+              imagePath = path.join(sessionPath, `src_${fileIdx}.jpg`);
+              await execFileAsync('heif-convert', ['-q', '92', stored, imagePath], { timeout: 120000 });
+            }
+            const pageKey = `p_${fileIdx}_0`;
+            const meta = await sharp(imagePath).rotate().metadata();
+            await sharp(imagePath).rotate()
               .resize({ width: 700, height: 900, fit: 'inside', withoutEnlargement: true })
-              .jpeg({ quality: 85 })
-              .toFile(thumbPath);
-
-            allPages.push({
-              id: `${sessionId}_${pageKey}`,
-              sourceFileName: fixedName,
-              sourceType: 'image',
-              originalPageIndex: 0,
-              displayNumber: globalDisplayNum++,
-              rotation: 0,
-              thumbnailUrl: `/api/tools/thumb/${sessionId}/${thumbFilename}`,
-              width: w,
-              height: h,
-              sessionId,
-              pageKey,
-              sourceFilePath: file.path,
-              fileSize,
+              .jpeg({ quality: 85 }).toFile(path.join(sessionPath, `${pageKey}.jpg`));
+            newPages.push({
+              id: `${sessionId}_${pageKey}`, sourceFileName: fixedName, sourceType: 'image', originalPageIndex: 0,
+              displayNumber: displayNum++, rotation: 0, thumbnailUrl: `/api/tools/thumb/${sessionId}/${pageKey}.jpg`,
+              width: meta.width || 800, height: meta.height || 1100, sessionId, pageKey, sourceFilePath: imagePath, fileSize,
             });
-          } catch (imgErr) {
-            console.error(`[Tools] Fehler beim Verarbeiten von Bild ${fixedName}:`, imgErr);
+          } else if (STUDIO_TEXT_EXT.has(ext)) {
+            // Vollständig als PDF setzen (Umlaute/Sonderzeichen, mehrere Seiten) statt nur eine Vorschau
+            const { text } = decodeText(fs.readFileSync(stored));
+            const utf8 = path.join(sessionPath, `src_${fileIdx}.utf8.txt`);
+            fs.writeFileSync(utf8, text, 'utf8');
+            const pdfPath = path.join(sessionPath, `src_${fileIdx}.pdf`);
+            const mode = ext === '.md' || ext === '.markdown' ? 'md' : 'txt';
+            await execFileAsync('python3', [TEXTPDF_PY_PATH, utf8, pdfPath, mode, fixedName], { timeout: 60000 });
+            await addPdfPages(pdfPath, fileIdx, fixedName, fileSize);
+          } else {
+            skipped.push({
+              name: fixedName,
+              reason: ['.doc', '.docx', '.odt', '.xls', '.xlsx', '.ods', '.ppt', '.pptx'].includes(ext)
+                ? 'Office-Dateien kann Scanny nicht umwandeln – bitte vorher als PDF speichern.'
+                : `Dateityp "${ext || '(keine Endung)'}" wird nicht unterstützt.`,
+            });
           }
-        }
-        // 3. Text / Markdown / CSV / Office Dokumente
-        else {
+        } catch (fileErr: any) {
+          console.error(`[Tools] ${fixedName} konnte nicht gelesen werden:`, fileErr);
+          skipped.push({ name: fixedName, reason: 'Datei konnte nicht gelesen werden (beschädigt oder unbekanntes Format).' });
+        } finally {
           try {
-            let textPreview = '';
-            if (['.txt', '.md', '.csv', '.json', '.log', '.xml', '.html'].includes(ext)) {
-              const raw = fs.readFileSync(file.path, 'utf8');
-              textPreview = raw.slice(0, 1000);
-            } else {
-              textPreview = `${fixedName}\n(${ext.toUpperCase().replace('.', '')}-Datei)`;
-            }
-
-            const pageKey = `p_${fIdx}_0`;
-            const thumbFilename = `${pageKey}.jpg`;
-            const thumbPath = path.join(sessionPath, thumbFilename);
-
-            // Stilisierte Kartenvorschau für Text/Dokumente generieren
-            const safePreview = textPreview
-              .replace(/&/g, '&amp;')
-              .replace(/</g, '&lt;')
-              .replace(/>/g, '&gt;')
-              .split('\n')
-              .slice(0, 18)
-              .map((line, idx) => `<tspan x="30" y="${90 + idx * 24}">${line.slice(0, 48)}</tspan>`)
-              .join('');
-
-            const svg = `<svg width="500" height="700" xmlns="http://www.w3.org/2000/svg">
-              <rect width="100%" height="100%" fill="#f8fafc" stroke="#cbd5e1" stroke-width="2" rx="8"/>
-              <rect x="20" y="20" width="460" height="42" fill="#e2e8f0" rx="6"/>
-              <text x="35" y="47" font-family="monospace" font-size="16" font-weight="bold" fill="#334155">${fixedName.slice(0, 35)}</text>
-              <text font-family="monospace" font-size="13" fill="#475569">
-                ${safePreview}
-              </text>
-            </svg>`;
-
-            await sharp(Buffer.from(svg)).jpeg().toFile(thumbPath);
-
-            allPages.push({
-              id: `${sessionId}_${pageKey}`,
-              sourceFileName: fixedName,
-              sourceType: 'text',
-              originalPageIndex: 0,
-              displayNumber: globalDisplayNum++,
-              rotation: 0,
-              thumbnailUrl: `/api/tools/thumb/${sessionId}/${thumbFilename}`,
-              width: 500,
-              height: 700,
-              sessionId,
-              pageKey,
-              sourceFilePath: file.path,
-              textSnippet: textPreview,
-              fileSize,
-            });
-          } catch (docErr) {
-            console.error(`[Tools] Fehler bei Text/Doc ${fixedName}:`, docErr);
-          }
+            if (fs.existsSync(file.path)) fs.unlinkSync(file.path);
+          } catch {}
         }
       }
 
-      // Session-Metadaten speichern
+      const allPages = [...previous, ...newPages];
       fs.writeFileSync(
         path.join(sessionPath, 'manifest.json'),
-        JSON.stringify({ sessionId, pages: allPages, createdAt: new Date().toISOString() })
+        JSON.stringify({ sessionId, pages: allPages, fileCount: fileOffset + files.length, createdAt: new Date().toISOString() })
       );
+      if (skipped.length > 0) console.log(`[Tools] Übersprungen: ${skipped.map((x) => x.name).join(', ')}`);
 
+      // Server-Pfade bleiben auf dem Server
+      const publicPages = (list: SessionPageMeta[]) => list.map(({ sourceFilePath, ...rest }) => rest);
       res.json({
         sessionId,
-        pages: allPages,
+        pages: publicPages(newPages),
+        allPages: publicPages(allPages),
+        skipped,
         fileCount: files.length,
-        totalPages: allPages.length,
+        totalPages: newPages.length,
       });
     } catch (err: any) {
+      for (const f of files) {
+        try {
+          if (fs.existsSync(f.path)) fs.unlinkSync(f.path);
+        } catch {}
+      }
       console.error('[Tools] Fehler beim Vorbereiten der Sitzung:', err);
       res.status(500).json({ error: err?.message || 'Fehler beim Analysieren der Dateien.' });
     }
@@ -434,32 +429,7 @@ toolsRouter.post('/tools/assemble', async (req: Request, res: Response) => {
           height: drawH,
         });
       }
-      // 3. Quellseite ist Text
-      else {
-        const a4Width = 595.28;
-        const a4Height = 841.89;
-        const newPage = finalPdf.addPage([a4Width, a4Height]);
-        const textContent = pageMeta.textSnippet || pageMeta.sourceFileName;
-        const lines = textContent.split('\n').slice(0, 45);
-
-        newPage.drawText(pageMeta.sourceFileName, {
-          x: 40,
-          y: a4Height - 50,
-          size: 14,
-          font: helveticaFont,
-          color: rgb(0.1, 0.1, 0.1),
-        });
-
-        lines.forEach((line: string, lIdx: number) => {
-          newPage.drawText(line.slice(0, 80), {
-            x: 40,
-            y: a4Height - 80 - lIdx * 15,
-            size: 10,
-            font: helveticaFont,
-            color: rgb(0.2, 0.2, 0.2),
-          });
-        });
-      }
+      // (Textdateien werden schon beim Einlesen als PDF gesetzt – es gibt nur PDF- und Bildseiten)
     }
 
     // Seitenzahlen einfügen (falls gewünscht)
@@ -581,7 +551,7 @@ toolsRouter.post('/tools/assemble', async (req: Request, res: Response) => {
     // -------------------------------------------------------------
     if (targetFormat === 'images_zip') {
       res.setHeader('Content-Type', 'application/zip');
-      res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(safeTitle)}_Seiten.zip"`);
+      res.setHeader('Content-Disposition', attachment(`${safeTitle}_Seiten.zip`));
 
       const archive = new ZipArchive({ zlib: { level: 8 } });
       archive.pipe(res);
@@ -589,6 +559,7 @@ toolsRouter.post('/tools/assemble', async (req: Request, res: Response) => {
       // Jede Seite mit GS als Bild rendern
       const tempImgDir = path.join(paths.tmpDir, `zip_${Date.now()}`);
       fs.mkdirSync(tempImgDir, { recursive: true });
+      removeAfter(res, tempImgDir, finalOutputPath);
 
       try {
         await execFileAsync(
@@ -622,7 +593,8 @@ toolsRouter.post('/tools/assemble', async (req: Request, res: Response) => {
     // Ziel C: Lokal herunterladen als PDF
     // -------------------------------------------------------------
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(safeTitle)}.pdf"`);
+    res.setHeader('Content-Disposition', attachment(`${safeTitle}.pdf`));
+    removeAfter(res, finalOutputPath);
     return fs.createReadStream(finalOutputPath).pipe(res);
   } catch (err: any) {
     console.error('[Tools] Fehler bei assemble:', err);
@@ -745,7 +717,7 @@ toolsRouter.post('/tools/export-single-page', async (req: Request, res: Response
       res.setHeader('Content-Type', isPng ? 'image/png' : 'image/jpeg');
       res.setHeader(
         'Content-Disposition',
-        `attachment; filename="${encodeURIComponent(safeBaseName)}.${isPng ? 'png' : 'jpg'}"`
+        attachment(`${safeBaseName}.${isPng ? 'png' : 'jpg'}`)
       );
       return res.send(imageBuffer);
     }
@@ -775,7 +747,7 @@ toolsRouter.post('/tools/export-single-page', async (req: Request, res: Response
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader(
       'Content-Disposition',
-      `attachment; filename="${encodeURIComponent(safeBaseName)}.pdf"`
+      attachment(`${safeBaseName}.pdf`)
     );
     return res.send(Buffer.from(pdfBytes));
   } catch (err: any) {
@@ -821,11 +793,21 @@ toolsRouter.post(
         { timeout: 45000 }
       );
 
-      const newSize = fs.existsSync(outPath) ? fs.statSync(outPath).size : originalSize;
+      let newSize = fs.existsSync(outPath) ? fs.statSync(outPath).size : originalSize;
+      // Wird es nicht kleiner, das Original zurückgeben – und das auch so sagen
+      const improved = newSize < originalSize;
+      if (!improved) {
+        fs.copyFileSync(file.path, outPath);
+        newSize = originalSize;
+      }
+      try {
+        fs.unlinkSync(file.path);
+      } catch {}
       const downloadPath = `/api/tools/download-tmp/${path.basename(outPath)}?name=${encodeURIComponent(safeName)}_komprimiert.pdf`;
 
       res.json({
         success: true,
+        improved,
         originalSize,
         newSize,
         savedPercent: Math.max(0, Math.round(((originalSize - newSize) / originalSize) * 100)),
@@ -850,93 +832,69 @@ toolsRouter.post(
       const file = req.file;
       if (!file) return res.status(400).json({ error: 'Keine Datei übermittelt.' });
 
-      const ext = path.extname(file.originalname).toLowerCase();
+      const ext = path.extname(fixOriginalName(file.originalname)).toLowerCase();
       let extractedText = '';
-
-      if (ext === '.pdf') {
-        const { stdout } = await execFileAsync(
-          'gs',
-          ['-q', '-sDEVICE=txtwrite', '-o', '-', file.path],
-          { timeout: 60000, maxBuffer: 30 * 1024 * 1024 }
-        );
-        extractedText = stdout;
-      } else {
-        // Bei reinem Bild Text via OCR / tesseract
-        try {
-          const { stdout } = await execFileAsync(
-            'tesseract',
-            [file.path, 'stdout', '-l', 'deu+eng'],
-            { timeout: 60000 }
-          );
-          extractedText = stdout;
-        } catch {
-          extractedText = 'Kein OCR-Text erkannt oder Tesseract nicht installiert.';
+      let method = '';
+      const cleanup: string[] = [file.path];
+      try {
+        if (ext === '.pdf') {
+          // 1. Vorhandene Textebene (pdfminer: Umlaute auch bei eingebetteten Schriften korrekt)
+          const pageCount = (await PDFDocument.load(fs.readFileSync(file.path), { ignoreEncryption: true })).getPageCount();
+          extractedText = (await extractPdfText(file.path, 1, pageCount)).trim();
+          method = 'Textebene';
+          // 2. Keine Textebene (eingescannt): echte OCR mit ocrmypdf; bringt sie nichts, bleibt die Textebene
+          const layerText = extractedText;
+          if (!layerText.replace(/\s/g, '')) {
+            const sidecar = `${file.path}.txt`;
+            const ocrOut = `${file.path}.ocr.pdf`;
+            cleanup.push(sidecar, ocrOut);
+            await execFileAsync('ocrmypdf', ['--skip-text', '-l', 'deu', '--sidecar', sidecar, file.path, ocrOut], {
+              timeout: 300000,
+              maxBuffer: 20 * 1024 * 1024,
+            });
+            extractedText = fs.existsSync(sidecar)
+              ? fs.readFileSync(sidecar, 'utf8').replace(/\[OCR skipped on page\(s\) [^\]]*\]/g, '').replace(/\f/g, '\n\n').trim()
+              : '';
+            method = 'Texterkennung (OCR)';
+            if (!extractedText) {
+              extractedText = layerText;
+              method = 'Textebene';
+            }
+          }
+        } else if (['.jpg', '.jpeg', '.png', '.tif', '.tiff', '.bmp', '.webp', '.heic', '.heif'].includes(ext)) {
+          let imagePath = file.path;
+          if (ext === '.heic' || ext === '.heif') {
+            imagePath = `${file.path}.jpg`;
+            cleanup.push(imagePath);
+            await execFileAsync('heif-convert', ['-q', '92', file.path, imagePath], { timeout: 120000 });
+          }
+          // Nur Deutsch: mit deu+eng gehen Umlaute verloren (siehe ocr.ts)
+          const { stdout } = await execFileAsync('tesseract', [imagePath, 'stdout', '-l', 'deu'], {
+            timeout: 120000,
+            maxBuffer: 20 * 1024 * 1024,
+          });
+          extractedText = stdout.trim();
+          method = 'Texterkennung (OCR)';
+        } else {
+          return res.status(400).json({ error: `Dateityp "${ext || '(keine Endung)'}" wird nicht unterstützt (PDF oder Bild).` });
+        }
+      } finally {
+        for (const f of cleanup) {
+          try {
+            if (fs.existsSync(f)) fs.unlinkSync(f);
+          } catch {}
         }
       }
 
       res.json({
         success: true,
-        text: extractedText.trim(),
+        text: extractedText,
         characterCount: extractedText.length,
-        fileName: file.originalname,
+        method,
+        fileName: fixOriginalName(file.originalname),
       });
     } catch (err: any) {
       res.status(500).json({ error: err?.message || 'Fehler bei der Textextraktion.' });
-    }
-  }
-);
-
-// -------------------------------------------------------------
-// POST /api/tools/redact
-// PDF zensieren: Ausgewählte Bereiche unwiderruflich schwärzen
-// -------------------------------------------------------------
-toolsRouter.post(
-  '/tools/redact',
-  upload.single('file'),
-  async (req: Request, res: Response) => {
-    try {
-      const file = req.file;
-      if (!file) return res.status(400).json({ error: 'Keine PDF-Datei übermittelt.' });
-
-      const boxesRaw = req.body.boxes;
-      const boxes: Array<{ page: number; x: number; y: number; width: number; height: number }> =
-        typeof boxesRaw === 'string' ? JSON.parse(boxesRaw) : boxesRaw || [];
-
-      const pdfBytes = fs.readFileSync(file.path);
-      const pdfDoc = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
-
-      // Schwarze Rechtecke auf die Seiten einbrennen
-      for (const box of boxes) {
-        if (box.page >= 0 && box.page < pdfDoc.getPageCount()) {
-          const page = pdfDoc.getPage(box.page);
-          const { height } = page.getSize();
-          // Umrechnen von Top-Left (Browser-Canvas) zu PDF Bottom-Left Koordinaten
-          const pdfY = height - box.y - box.height;
-
-          page.drawRectangle({
-            x: box.x,
-            y: Math.max(0, pdfY),
-            width: box.width,
-            height: box.height,
-            color: rgb(0, 0, 0),
-            opacity: 1,
-          });
-        }
-      }
-
-      const redactedBytes = await pdfDoc.save();
-      const safeName = sanitizeTitle(path.parse(file.originalname).name);
-      const outPath = path.join(paths.tmpDir, `redacted_${Date.now()}_${safeName}.pdf`);
-      fs.writeFileSync(outPath, redactedBytes);
-
-      const downloadPath = `/api/tools/download-tmp/${path.basename(outPath)}?name=${encodeURIComponent(safeName)}_zensiert.pdf`;
-      res.json({
-        success: true,
-        downloadUrl: downloadPath,
-        tmpFile: path.basename(outPath),
-      });
-    } catch (err: any) {
-      res.status(500).json({ error: err?.message || 'Fehler beim Zensieren der PDF.' });
     }
   }
 );
@@ -952,7 +910,7 @@ toolsRouter.get('/tools/download-tmp/:filename', (req: Request, res: Response) =
 
   if (filePath && fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(downloadName)}"`);
+    res.setHeader('Content-Disposition', attachment(downloadName));
     return fs.createReadStream(filePath).pipe(res);
   }
   res.status(404).json({ error: 'Datei nicht gefunden oder abgelaufen.' });

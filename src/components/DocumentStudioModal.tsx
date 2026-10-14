@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { readJson, skippedNotice } from '../apiJson';
 import {
   X,
   RotateCw,
@@ -41,6 +42,10 @@ interface DocumentStudioModalProps {
   initialPages?: StudioPageItem[];
   initialSessionId?: string;
   initialMode?: StudioMode;
+  /** Seitenzahlen gleich eingeschaltet (Werkzeug "Seitenzahlen einfügen") */
+  initialPageNumbers?: boolean;
+  /** Hinweis aus dem Einlesen, z. B. übersprungene Dateien */
+  initialNotice?: string | null;
   folders: Folder[];
   onClose: () => void;
   onRefresh: () => Promise<void>;
@@ -52,6 +57,8 @@ export function DocumentStudioModal({
   initialPages = [],
   initialSessionId = '',
   initialMode = 'general',
+  initialPageNumbers = false,
+  initialNotice = null,
   folders,
   onClose,
   onRefresh,
@@ -78,7 +85,7 @@ export function DocumentStudioModal({
   const [showSettings, setShowSettings] = useState(false);
   const [compression, setCompression] = useState<CompressionLevel>('none');
   const [pageNumbering, setPageNumbering] = useState<PageNumberConfig>({
-    enabled: false,
+    enabled: initialPageNumbers,
     position: 'bottom-center',
     format: 'page_x_of_y',
     startFrom: 1,
@@ -88,7 +95,7 @@ export function DocumentStudioModal({
   // Export / Übergabe-Zustand
   const [isExporting, setIsExporting] = useState(false);
   const [exportSuccessMessage, setExportSuccessMessage] = useState<string | null>(null);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(initialNotice);
   const [isAddingFiles, setIsAddingFiles] = useState(false);
   const [isExportDropdownOpen, setIsExportDropdownOpen] = useState(false);
   const [isSinglePageModalOpen, setIsSinglePageModalOpen] = useState(false);
@@ -224,22 +231,26 @@ export function DocumentStudioModal({
 
     try {
       const formData = new FormData();
-      filesToAdd.forEach((f) => formData.append('files', f));
+      // Sitzung mitschicken: angehängte Seiten gehören zur SELBEN Sitzung, sonst würden sie beim
+      // Zusammenfügen über gleichlautende Seitenschlüssel auf falsche Seiten zeigen
+      if (sessionId) formData.append('sessionId', sessionId);
+      filesToAdd.filter((f) => !f.name.startsWith('.')).forEach((f) => formData.append('files', f));
 
       const res = await fetch('/api/tools/prepare-session', {
         method: 'POST',
         body: formData,
       });
-
+      const data = await readJson(res);
       if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || 'Fehler beim Hinzufügen der Dateien.');
+        throw new Error(data.error || 'Fehler beim Hinzufügen der Dateien.');
       }
 
-      const data = await res.json();
+      if (data.sessionId) setSessionId(data.sessionId);
       if (data.pages && Array.isArray(data.pages)) {
         setPages((prev) => [...prev, ...data.pages]);
       }
+      const notice = skippedNotice(data.skipped);
+      if (notice) setErrorMessage(notice);
     } catch (err: any) {
       setErrorMessage(err.message || 'Fehler beim Laden weiterer Dateien.');
     } finally {
@@ -283,7 +294,7 @@ export function DocumentStudioModal({
         });
 
         if (!res.ok) {
-          const err = await res.json();
+          const err = await readJson(res);
           throw new Error(err.error || 'Fehler beim Herunterladen des Dokuments.');
         }
 
@@ -307,7 +318,7 @@ export function DocumentStudioModal({
         });
 
         if (!res.ok) {
-          const err = await res.json();
+          const err = await readJson(res);
           throw new Error(err.error || 'Fehler bei der Übergabe an Scanny.');
         }
 

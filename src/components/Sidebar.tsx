@@ -15,7 +15,6 @@ import {
   Wrench,
 } from 'lucide-react';
 import { Folder, ActiveView } from '../types';
-import { ThemeToggle } from './ThemeToggle';
 
 
 interface SidebarProps {
@@ -360,12 +359,8 @@ export function Sidebar({
         </div>
       </div>
 
-      {/* Footer mit Theme-Auswahl und lokalem Status */}
+      {/* Footer mit lokalem Status (Design-Umschalter sitzt oben rechts und in den Einstellungen) */}
       <div className="p-3 border-t border-zinc-100 dark:border-zinc-800/80 space-y-2.5">
-        <div className="flex items-center justify-between px-1">
-          <span className="text-[11px] font-medium text-zinc-500 dark:text-zinc-400">Design</span>
-          <ThemeToggle variant="segmented" />
-        </div>
         <div className="flex items-center gap-2 text-[11px] text-zinc-500 dark:text-zinc-400 px-1">
           <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
           <span>Lokal auf Ihrem Rechner</span>

@@ -1,4 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { collectDroppedFiles } from '../dropFiles';
+import { readJson, skippedNotice } from '../apiJson';
 import {
   Folder as FolderIcon,
   Upload,
@@ -38,7 +40,6 @@ import { DocumentStudioModal, StudioMode } from './DocumentStudioModal';
 import { PdfCompressModal } from './tools/PdfCompressModal';
 import { PdfOcrModal } from './tools/PdfOcrModal';
 import { PdfCompareModal } from './tools/PdfCompareModal';
-import { PdfRedactModal } from './tools/PdfRedactModal';
 
 interface ToolsViewProps {
   folders: Folder[];
@@ -92,7 +93,9 @@ export function ToolsView({
   const [isCompressModalOpen, setIsCompressModalOpen] = useState(false);
   const [isOcrModalOpen, setIsOcrModalOpen] = useState(false);
   const [isCompareModalOpen, setIsCompareModalOpen] = useState(false);
-  const [isRedactModalOpen, setIsRedactModalOpen] = useState(false);
+  const [studioPageNumbers, setStudioPageNumbers] = useState(false);
+  const [studioNotice, setStudioNotice] = useState<string | null>(null);
+  const [toolsNotice, setToolsNotice] = useState<string | null>(null);
   const [isToolsExportDropdownOpen, setIsToolsExportDropdownOpen] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -121,64 +124,6 @@ export function ToolsView({
     }
   };
 
-  // Rekursives Auslesen aller Dateien aus einem gedroppten Ordner
-  const getFilesFromDataTransfer = async (dataTransfer: DataTransfer): Promise<File[]> => {
-    const files: File[] = [];
-    const items = dataTransfer.items;
-    if (!items || items.length === 0) {
-      return Array.from(dataTransfer.files);
-    }
-
-    const queue: any[] = [];
-    for (let i = 0; i < items.length; i++) {
-      const item = items[i];
-      if (item.webkitGetAsEntry) {
-        const entry = item.webkitGetAsEntry();
-        if (entry) queue.push(entry);
-      } else if (item.kind === 'file') {
-        const f = item.getAsFile();
-        if (f) files.push(f);
-      }
-    }
-
-    while (queue.length > 0) {
-      const entry = queue.shift();
-      if (entry.isFile) {
-        await new Promise<void>((resolve) => {
-          entry.file(
-            (file: File) => {
-              files.push(file);
-              resolve();
-            },
-            () => resolve()
-          );
-        });
-      } else if (entry.isDirectory) {
-        const dirReader = entry.createReader();
-        await new Promise<void>((resolve) => {
-          const readEntries = () => {
-            dirReader.readEntries(
-              async (entries: any[]) => {
-                if (entries.length === 0) {
-                  resolve();
-                } else {
-                  for (const e of entries) {
-                    queue.push(e);
-                  }
-                  readEntries();
-                }
-              },
-              () => resolve()
-            );
-          };
-          readEntries();
-        });
-      }
-    }
-
-    return files.length > 0 ? files : Array.from(dataTransfer.files);
-  };
-
   // Dateien an das Backend senden und Werkbank öffnen
   const processFilesIntoStudio = async (files: File[], targetMode: StudioMode = studioMode) => {
     if (files.length === 0) return;
@@ -189,25 +134,28 @@ export function ToolsView({
 
     try {
       const formData = new FormData();
-      files.forEach((f) => formData.append('files', f));
+      files.filter((f) => !f.name.startsWith('.')).forEach((f) => formData.append('files', f));
 
       const res = await fetch('/api/tools/prepare-session', {
         method: 'POST',
         body: formData,
       });
-
+      const data = await readJson(res);
       if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || 'Fehler beim Analysieren der Dateien.');
+        throw new Error(data.error || 'Fehler beim Analysieren der Dateien.');
       }
 
-      const data = await res.json();
-      setStudioPages(data.pages || []);
+      const notice = skippedNotice(data.skipped);
+      if (!data.pages || data.pages.length === 0) {
+        throw new Error(notice || 'In den Dateien wurde keine verwendbare Seite gefunden.');
+      }
+      setStudioPages(data.pages);
       setStudioSessionId(data.sessionId || '');
+      setStudioNotice(notice);
       setStudioMode(targetMode);
       setIsStudioOpen(true);
     } catch (err: any) {
-      alert(err.message || 'Fehler beim Laden der Werkbank.');
+      setToolsNotice(err.message || 'Fehler beim Laden der Werkbank.');
     } finally {
       setIsProcessingUpload(false);
       setUploadProgressText('');
@@ -218,13 +166,15 @@ export function ToolsView({
   const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault();
     setIsDraggingOver(false);
-    const files = await getFilesFromDataTransfer(e.dataTransfer);
+    // Ordner rekursiv, ohne .DS_Store & Co. (gemeinsam mit dem Eingang, siehe dropFiles.ts)
+    const files = await collectDroppedFiles(e.dataTransfer);
     const modeToUse: StudioMode = files.length > 1 ? 'merge' : 'general';
     await processFilesIntoStudio(files, modeToUse);
   };
 
   // Klick auf ein Werkzeug im Katalog
   const handleToolClick = (toolId: string) => {
+    if (toolId !== 'page_numbers') setStudioPageNumbers(false);
     switch (toolId) {
       case 'merge':
         setStudioMode('merge');
@@ -240,6 +190,7 @@ export function ToolsView({
         break;
       case 'page_numbers':
         setStudioMode('organize');
+        setStudioPageNumbers(true);
         fileInputRef.current?.click();
         break;
       case 'compress':
@@ -250,16 +201,6 @@ export function ToolsView({
         break;
       case 'compare':
         setIsCompareModalOpen(true);
-        break;
-      case 'redact':
-        setIsRedactModalOpen(true);
-        break;
-      case 'empty_pdf':
-        setStudioMode('general');
-        processFilesIntoStudio(
-          [new File(['Neues Dokument'], 'Neues_Dokument.txt', { type: 'text/plain' })],
-          'general'
-        );
         break;
       default:
         setStudioMode('general');
@@ -335,7 +276,7 @@ export function ToolsView({
       id: 'ocr',
       title: 'Text erkennen (OCR)',
       description:
-        'Eingescannten Text mit OCR durchsuchbar machen, Textstellen markieren und exportieren.',
+        'Text aus PDFs und Fotos auslesen – eingescannte Seiten per Texterkennung – zum Kopieren oder Speichern.',
       icon: <ScanText className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />,
       category: 'Optimieren',
       colorClass: 'border-emerald-500/30 hover:border-emerald-500/60 dark:hover:border-emerald-400/60',
@@ -344,42 +285,12 @@ export function ToolsView({
     },
 
     // 3. Schützen
-    {
-      id: 'password',
-      title: 'Passwort festlegen',
-      description: 'Vertrauliche Dokumente mit einem Passwort vor unbefugtem Öffnen schützen.',
-      icon: <Lock className="w-5 h-5 text-rose-600 dark:text-rose-400" />,
-      category: 'Schützen',
-      colorClass: 'border-rose-500/30 hover:border-rose-500/60 dark:hover:border-rose-400/60',
-      iconBgClass: 'bg-rose-500/10 dark:bg-rose-500/20',
-      badge: 'Sicherheit',
-    },
-    {
-      id: 'redact',
-      title: 'PDF zensieren & schwärzen',
-      description: 'Vertrauliche Informationen, IBAN oder Adressen dauerhaft unkenntlich machen.',
-      icon: <ShieldAlert className="w-5 h-5 text-rose-600 dark:text-rose-400" />,
-      category: 'Schützen',
-      colorClass: 'border-rose-500/30 hover:border-rose-500/60 dark:hover:border-rose-400/60',
-      iconBgClass: 'bg-rose-500/10 dark:bg-rose-500/20',
-      badge: 'Datenschutz',
-    },
 
     // 4. Überarbeiten
     {
-      id: 'comment',
-      title: 'PDFs kommentieren',
-      description: 'Notizen, Randbemerkungen und Hervorhebungen auf Seiten anbringen.',
-      icon: <MessageSquare className="w-5 h-5 text-sky-600 dark:text-sky-400" />,
-      category: 'Überarbeiten',
-      colorClass: 'border-sky-500/30 hover:border-sky-500/60 dark:hover:border-sky-400/60',
-      iconBgClass: 'bg-sky-500/10 dark:bg-sky-500/20',
-      badge: 'Notizen',
-    },
-    {
       id: 'compare',
-      title: 'PDFs vergleichen',
-      description: 'Zwei Dokumente nebeneinander anzeigen und auf inhaltliche Abweichungen prüfen.',
+      title: 'PDFs nebeneinander ansehen',
+      description: 'Zwei Dokumente nebeneinander öffnen, um sie mit eigenen Augen zu vergleichen.',
       icon: <Columns2 className="w-5 h-5 text-sky-600 dark:text-sky-400" />,
       category: 'Überarbeiten',
       colorClass: 'border-sky-500/30 hover:border-sky-500/60 dark:hover:border-sky-400/60',
@@ -399,37 +310,10 @@ export function ToolsView({
       badge: 'Fotos zu PDF',
     },
     {
-      id: 'word_to_pdf',
-      title: 'Word in PDF',
-      description: 'Ein PDF aus einem Word- oder Textdokument erzeugen.',
+      id: 'text_to_pdf',
+      title: 'Text in PDF',
+      description: 'TXT- und Markdown-Dateien sauber als PDF setzen – mit Überschriften, Tabellen und Listen.',
       icon: <FileText className="w-5 h-5 text-teal-600 dark:text-teal-400" />,
-      category: 'Erstellen',
-      colorClass: 'border-teal-500/30 hover:border-teal-500/60 dark:hover:border-teal-400/60',
-      iconBgClass: 'bg-teal-500/10 dark:bg-teal-500/20',
-    },
-    {
-      id: 'excel_to_pdf',
-      title: 'Tabelle in PDF',
-      description: 'Excel- und CSV-Tabellen in strukturierte PDFs verwandeln.',
-      icon: <Table className="w-5 h-5 text-teal-600 dark:text-teal-400" />,
-      category: 'Erstellen',
-      colorClass: 'border-teal-500/30 hover:border-teal-500/60 dark:hover:border-teal-400/60',
-      iconBgClass: 'bg-teal-500/10 dark:bg-teal-500/20',
-    },
-    {
-      id: 'other_to_pdf',
-      title: 'Andere Dateien in PDF',
-      description: 'PDFs aus Präsentationen, Textdateien uvm. erstellen.',
-      icon: <FilePlus className="w-5 h-5 text-teal-600 dark:text-teal-400" />,
-      category: 'Erstellen',
-      colorClass: 'border-teal-500/30 hover:border-teal-500/60 dark:hover:border-teal-400/60',
-      iconBgClass: 'bg-teal-500/10 dark:bg-teal-500/20',
-    },
-    {
-      id: 'empty_pdf',
-      title: 'Leeres PDF',
-      description: 'Ein neues, leeres PDF erstellen und Seiten hinzufügen.',
-      icon: <FileCode className="w-5 h-5 text-teal-600 dark:text-teal-400" />,
       category: 'Erstellen',
       colorClass: 'border-teal-500/30 hover:border-teal-500/60 dark:hover:border-teal-400/60',
       iconBgClass: 'bg-teal-500/10 dark:bg-teal-500/20',
@@ -437,37 +321,10 @@ export function ToolsView({
 
     // 6. Konvertieren
     {
-      id: 'pdf_to_word',
-      title: 'PDF in Word',
-      description: 'PDFs in bearbeitbare Word-Dokumente umwandeln.',
-      icon: <FileText className="w-5 h-5 text-amber-600 dark:text-amber-400" />,
-      category: 'Konvertieren',
-      colorClass: 'border-amber-500/30 hover:border-amber-500/60 dark:hover:border-amber-400/60',
-      iconBgClass: 'bg-amber-500/10 dark:bg-amber-500/20',
-    },
-    {
       id: 'pdf_to_image',
       title: 'PDF in Bild',
       description: 'PDF-Seiten als hochauflösende Bilder (JPG/PNG) speichern.',
       icon: <ImageIcon className="w-5 h-5 text-amber-600 dark:text-amber-400" />,
-      category: 'Konvertieren',
-      colorClass: 'border-amber-500/30 hover:border-amber-500/60 dark:hover:border-amber-400/60',
-      iconBgClass: 'bg-amber-500/10 dark:bg-amber-500/20',
-    },
-    {
-      id: 'pdf_to_excel',
-      title: 'PDF in Excel',
-      description: 'Tabellenstrukturen aus einem PDF als Excel-Tabelle speichern.',
-      icon: <FileSpreadsheet className="w-5 h-5 text-amber-600 dark:text-amber-400" />,
-      category: 'Konvertieren',
-      colorClass: 'border-amber-500/30 hover:border-amber-500/60 dark:hover:border-amber-400/60',
-      iconBgClass: 'bg-amber-500/10 dark:bg-amber-500/20',
-    },
-    {
-      id: 'pdf_to_ppt',
-      title: 'PDF in PowerPoint',
-      description: 'PDFs in PowerPoint-Folien konvertieren.',
-      icon: <Presentation className="w-5 h-5 text-amber-600 dark:text-amber-400" />,
       category: 'Konvertieren',
       colorClass: 'border-amber-500/30 hover:border-amber-500/60 dark:hover:border-amber-400/60',
       iconBgClass: 'bg-amber-500/10 dark:bg-amber-500/20',
@@ -580,123 +437,6 @@ export function ToolsView({
 
           {/* Rechte Seite: Export-Button mit Dropdown & Abbrechen Button */}
           <div className="flex items-center gap-2">
-            {/* EXPORT-BUTTON MIT DROPDOWN IN DER TOOLSVIEW */}
-            <div className="relative" ref={toolsExportDropdownRef}>
-              <button
-                type="button"
-                id="tools-export-dropdown-btn"
-                onClick={() => setIsToolsExportDropdownOpen(!isToolsExportDropdownOpen)}
-                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 hover:text-zinc-900 dark:hover:text-white text-xs font-semibold shadow-xs transition-all cursor-pointer"
-                title="Dokumente oder Seiten exportieren (PDF, JPG, PNG)"
-              >
-                <Download className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
-                <span>Exportieren</span>
-                <ChevronDown
-                  className={`w-3.5 h-3.5 text-zinc-400 transition-transform ${
-                    isToolsExportDropdownOpen ? 'rotate-180' : ''
-                  }`}
-                />
-              </button>
-
-              {isToolsExportDropdownOpen && (
-                <div
-                  id="tools-export-menu"
-                  className="absolute right-0 top-full mt-2 w-72 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-xl p-2 z-50 text-left animate-in fade-in zoom-in-95 duration-100"
-                >
-                  <div className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-zinc-400">
-                    Dokumenten-Export
-                  </div>
-
-                  {/* 1. PDF Export */}
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsToolsExportDropdownOpen(false);
-                      if (studioPages.length > 0) {
-                        setIsStudioOpen(true);
-                      } else {
-                        fileInputRef.current?.click();
-                      }
-                    }}
-                    className="w-full px-3 py-2 rounded-xl text-left hover:bg-zinc-100 dark:hover:bg-zinc-800 text-xs text-zinc-800 dark:text-zinc-200 flex items-center gap-2.5 transition-colors cursor-pointer group"
-                  >
-                    <div className="w-7 h-7 rounded-lg bg-red-500/10 dark:bg-red-500/20 text-red-600 dark:text-red-400 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-                      <FileText className="w-4 h-4" />
-                    </div>
-                    <div>
-                      <div className="font-semibold text-zinc-900 dark:text-white">Als PDF Dokument (.pdf)</div>
-                      <div className="text-[10px] text-zinc-500 dark:text-zinc-400">
-                        {studioPages.length > 0
-                          ? `${studioPages.length} Seiten als PDF speichern`
-                          : 'Dateien wählen und als PDF exportieren'}
-                      </div>
-                    </div>
-                  </button>
-
-                  {/* 2. Alle Seiten als Bilder (.zip) */}
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsToolsExportDropdownOpen(false);
-                      if (studioPages.length > 0) {
-                        setIsStudioOpen(true);
-                      } else {
-                        fileInputRef.current?.click();
-                      }
-                    }}
-                    className="w-full px-3 py-2 rounded-xl text-left hover:bg-zinc-100 dark:hover:bg-zinc-800 text-xs text-zinc-800 dark:text-zinc-200 flex items-center gap-2.5 transition-colors cursor-pointer group"
-                  >
-                    <div className="w-7 h-7 rounded-lg bg-amber-500/10 dark:bg-amber-500/20 text-amber-600 dark:text-amber-400 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-                      <Layers className="w-4 h-4" />
-                    </div>
-                    <div>
-                      <div className="font-semibold text-zinc-900 dark:text-white">
-                        Alle Seiten als Bilder (.zip)
-                      </div>
-                      <div className="text-[10px] text-zinc-500 dark:text-zinc-400">
-                        Alle Seiten als hochauflösende Bilder im Archiv
-                      </div>
-                    </div>
-                  </button>
-
-                  <div className="h-px bg-zinc-200 dark:bg-zinc-800 my-1.5 mx-1" />
-
-                  <div className="px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-zinc-400">
-                    Einzelne Seiten als Bild
-                  </div>
-
-                  {/* 3. Einzelne Seiten als Bild (JPG / PNG) */}
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsToolsExportDropdownOpen(false);
-                      if (studioPages.length > 0) {
-                        setIsStudioOpen(true);
-                      } else {
-                        fileInputRef.current?.click();
-                      }
-                    }}
-                    className="w-full px-3 py-2 rounded-xl text-left hover:bg-zinc-100 dark:hover:bg-zinc-800 text-xs text-zinc-800 dark:text-zinc-200 flex items-center gap-2.5 transition-colors cursor-pointer group"
-                  >
-                    <div className="w-7 h-7 rounded-lg bg-emerald-500/10 dark:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-                      <ImageIcon className="w-4 h-4" />
-                    </div>
-                    <div>
-                      <div className="font-semibold text-zinc-900 dark:text-white flex items-center gap-1.5">
-                        <span>Einzelseite als Bild (JPG / PNG)</span>
-                        <span className="px-1.5 py-0.2 rounded text-[9px] bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 font-bold">
-                          JPG/PNG
-                        </span>
-                      </div>
-                      <div className="text-[10px] text-zinc-500 dark:text-zinc-400">
-                        Einzelne Dokumentseiten als JPG oder PNG herunterladen
-                      </div>
-                    </div>
-                  </button>
-                </div>
-              )}
-            </div>
-
             {/* Abbrechen / Verlassen Button */}
             <button
               type="button"
@@ -720,7 +460,7 @@ export function ToolsView({
               </span>
               <span className="text-xs text-zinc-400">•</span>
               <span className="text-xs text-zinc-500 dark:text-zinc-400">
-                16 praktische Werkzeuge
+                {toolCards.length} praktische Werkzeuge
               </span>
             </div>
             <h1 className="text-2xl font-bold tracking-tight text-zinc-900 dark:text-white mt-1">
@@ -755,6 +495,18 @@ export function ToolsView({
             )}
           </div>
         </div>
+
+        {toolsNotice && (
+          <div
+            id="tools-notice"
+            className="flex items-start justify-between gap-3 p-3 rounded-xl border border-amber-200 dark:border-amber-900/60 bg-amber-50 dark:bg-amber-950/30 text-xs text-amber-800 dark:text-amber-200"
+          >
+            <span>{toolsNotice}</span>
+            <button type="button" onClick={() => setToolsNotice(null)} className="shrink-0 font-semibold cursor-pointer" aria-label="Hinweis schließen">
+              ✕
+            </button>
+          </div>
+        )}
 
         {/* PROMINENTER WORKSPACE DROP-BEREICH (Ganzen Ordner oder beliebige Dateien reinziehen) */}
         <div
@@ -939,7 +691,7 @@ export function ToolsView({
               <SlidersHorizontal className="w-3.5 h-3.5" />
               <span>Kategorie:</span>
             </span>
-            {categories.map((cat) => {
+            {categories.filter((cat) => cat === 'Alle' || toolCards.some((c) => c.category === cat)).map((cat) => {
               const count =
                 cat === 'Alle' ? toolCards.length : toolCards.filter((c) => c.category === cat).length;
               const isSelected = selectedCategory === cat;
@@ -1039,6 +791,8 @@ export function ToolsView({
         initialPages={studioPages}
         initialSessionId={studioSessionId}
         initialMode={studioMode}
+        initialPageNumbers={studioPageNumbers}
+        initialNotice={studioNotice}
         folders={folders}
         onClose={() => setIsStudioOpen(false)}
         onRefresh={onRefresh}
@@ -1047,24 +801,22 @@ export function ToolsView({
 
       {/* SPEZIALISIERTE MODALE */}
       <PdfCompressModal
+        key={isCompressModalOpen ? 'offen' : 'zu'}
         isOpen={isCompressModalOpen}
         onClose={() => setIsCompressModalOpen(false)}
         onRefresh={onRefresh}
       />
 
       <PdfOcrModal
+        key={isOcrModalOpen ? 'offen' : 'zu'}
         isOpen={isOcrModalOpen}
         onClose={() => setIsOcrModalOpen(false)}
       />
 
       <PdfCompareModal
+        key={isCompareModalOpen ? 'offen' : 'zu'}
         isOpen={isCompareModalOpen}
         onClose={() => setIsCompareModalOpen(false)}
-      />
-
-      <PdfRedactModal
-        isOpen={isRedactModalOpen}
-        onClose={() => setIsRedactModalOpen(false)}
       />
     </div>
   );

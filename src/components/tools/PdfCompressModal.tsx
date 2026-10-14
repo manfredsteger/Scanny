@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { readJson } from '../../apiJson';
 import { X, Minimize2, Upload, Download, Check, AlertCircle, Loader2, ArrowRight } from 'lucide-react';
 
 interface PdfCompressModalProps {
@@ -13,6 +14,7 @@ export function PdfCompressModal({ isOpen, onClose, onRefresh }: PdfCompressModa
   const [isProcessing, setIsProcessing] = useState(false);
   const [result, setResult] = useState<{
     originalSize: number;
+    improved?: boolean;
     newSize: number;
     savedPercent: number;
     downloadUrl: string;
@@ -45,12 +47,10 @@ export function PdfCompressModal({ isOpen, onClose, onRefresh }: PdfCompressModa
         body: formData,
       });
 
+      const data = await readJson(res);
       if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || 'Fehler beim Komprimieren.');
+        throw new Error(data.error || 'Fehler beim Komprimieren.');
       }
-
-      const data = await res.json();
       setResult(data);
     } catch (err: any) {
       setError(err.message || 'Komprimierung fehlgeschlagen.');
@@ -65,9 +65,11 @@ export function PdfCompressModal({ isOpen, onClose, onRefresh }: PdfCompressModa
     try {
       // Ingest the compressed file
       const downloadRes = await fetch(result.downloadUrl);
+      // Sonst landet bei abgelaufener Datei die JSON-Fehlermeldung als "PDF" im Eingang
+      if (!downloadRes.ok) throw new Error('Das komprimierte PDF ist nicht mehr verfügbar – bitte erneut komprimieren.');
       const blob = await downloadRes.blob();
       const uploadData = new FormData();
-      uploadData.append('files', blob, file?.name.replace('.pdf', '_komprimiert.pdf') || 'komprimiert.pdf');
+      uploadData.append('files', blob, file?.name.replace(/\.pdf$/i, '') + '_komprimiert.pdf' || 'komprimiert.pdf');
 
       const res = await fetch('/api/upload', {
         method: 'POST',
@@ -183,11 +185,13 @@ export function PdfCompressModal({ isOpen, onClose, onRefresh }: PdfCompressModa
             <div className="flex items-center justify-between">
               <span className="text-xs font-semibold text-emerald-300 flex items-center gap-1.5">
                 <Check className="w-4 h-4 text-emerald-400" />
-                Erfolgreich komprimiert!
+                {result.improved === false ? 'Schon optimal – kleiner geht es nicht' : 'Erfolgreich komprimiert!'}
               </span>
-              <span className="text-xs font-bold px-2 py-0.5 rounded-md bg-emerald-600/40 text-emerald-200 font-mono">
-                -{result.savedPercent}%
-              </span>
+              {result.improved !== false && (
+                <span className="text-xs font-bold px-2 py-0.5 rounded-md bg-emerald-600/40 text-emerald-200 font-mono">
+                  -{result.savedPercent}%
+                </span>
+              )}
             </div>
             <div className="flex items-center justify-between text-xs text-zinc-300">
               <div>
@@ -209,7 +213,7 @@ export function PdfCompressModal({ isOpen, onClose, onRefresh }: PdfCompressModa
               <div className="flex items-center gap-2 pt-1">
                 <a
                   href={result.downloadUrl}
-                  download
+                  download={(file?.name.replace(/\.pdf$/i, '') || 'Dokument') + '_komprimiert.pdf'}
                   className="flex-1 py-2 bg-zinc-800 hover:bg-zinc-700 text-white rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors"
                 >
                   <Download className="w-3.5 h-3.5" />
