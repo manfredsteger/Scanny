@@ -5,12 +5,14 @@ import { FolderView } from './components/FolderView';
 import { SearchView } from './components/SearchView';
 import { DashboardView } from './components/DashboardView';
 import { SettingsView } from './components/SettingsView';
+import { ToolsView } from './components/ToolsView';
 import { FolderModal } from './components/FolderModal';
 import { ImportDialog } from './components/ImportDialog';
 import { DocumentDetailDrawer } from './components/DocumentDetailDrawer';
 import { TrashView } from './components/TrashView';
 import { MergeDialog } from './components/MergeDialog';
-import { collectDroppedFiles } from './dropFiles';
+import { ThemeToggle } from './components/ThemeToggle';
+
 import {
   Folder,
   ActiveView,
@@ -325,9 +327,9 @@ export default function App() {
       e.preventDefault();
       dragCounter.current = 0;
       setIsWindowDragging(false);
-      if (!e.dataTransfer) return;
-      const files = await collectDroppedFiles(e.dataTransfer);
-      if (files.length > 0) await handleUploadFiles(files);
+      if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
+        await handleUploadFiles(e.dataTransfer.files);
+      }
     };
 
     window.addEventListener('dragenter', handleDragEnter);
@@ -497,9 +499,9 @@ export default function App() {
 
       {/* Hauptbereich */}
       <main className="flex-1 h-screen overflow-y-auto">
-        {/* Globale Suche oben */}
-        <div className="sticky top-0 z-30 px-6 md:px-8 py-3 bg-zinc-50/85 dark:bg-zinc-950/85 backdrop-blur-sm border-b border-zinc-200/80 dark:border-zinc-800/80">
-          <div className="relative max-w-xl">
+        {/* Globale Leiste oben (Suche + Theme Switcher) */}
+        <div className="sticky top-0 z-30 px-6 md:px-8 py-3 bg-zinc-50/85 dark:bg-zinc-950/85 backdrop-blur-sm border-b border-zinc-200/80 dark:border-zinc-800/80 flex items-center justify-between gap-4">
+          <div className="relative flex-1 max-w-xl">
             <SearchIcon className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
             <input
               ref={searchInputRef}
@@ -518,11 +520,16 @@ export default function App() {
                 }
               }}
               placeholder="Belege durchsuchen …"
-              className="w-full pl-10 pr-10 py-2 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl text-sm placeholder:text-zinc-400 focus:outline-hidden focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
+              className="w-full pl-10 pr-10 py-2 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl text-sm text-zinc-900 dark:text-zinc-100 placeholder:text-zinc-400 focus:outline-hidden focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
             />
             <kbd className="absolute right-3 top-1/2 -translate-y-1/2 px-1.5 text-[10px] font-mono text-zinc-400 border border-zinc-200 dark:border-zinc-700 rounded">
               /
             </kbd>
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0">
+            <ThemeToggle variant="segmented" className="hidden sm:inline-flex" />
+            <ThemeToggle variant="compact" className="sm:hidden flex" />
           </div>
         </div>
 
@@ -589,6 +596,19 @@ export default function App() {
 
         {activeView.type === 'search' && (
           <SearchView folders={folders} query={searchQuery} onOpenDocument={openDocumentById} />
+        )}
+
+        {activeView.type === 'tools' && (
+          <ToolsView
+            folders={folders}
+            onRefresh={async () => {
+              await fetchDocumentsAndStats();
+              await fetchFolders();
+            }}
+            onOpenInbox={() => setActiveView({ type: 'inbox' })}
+            onOpenDashboard={() => setActiveView({ type: 'dashboard' })}
+            onBack={() => setActiveView({ type: 'inbox' })}
+          />
         )}
 
         {activeView.type === 'trash' && (

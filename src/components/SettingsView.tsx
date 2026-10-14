@@ -8,8 +8,14 @@ import {
   Database,
   Terminal,
   Palette,
+  Sun,
+  Moon,
+  Monitor,
+  SunMoon,
 } from 'lucide-react';
 import { SystemPaths, SystemHealth } from '../types';
+import { useTheme } from '../context/ThemeContext';
+
 
 interface SettingsViewProps {
   paths: SystemPaths | null;
@@ -17,6 +23,7 @@ interface SettingsViewProps {
 }
 
 export function SettingsView({ paths, health }: SettingsViewProps) {
+  const { theme, resolvedTheme, setTheme, isSystemDark } = useTheme();
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [colorMode, setColorMode] = useState<'bw' | 'gray' | 'color'>('bw');
   const [isSaving, setIsSaving] = useState(false);
@@ -151,6 +158,82 @@ export function SettingsView({ paths, health }: SettingsViewProps) {
         <p className="text-sm text-zinc-500 dark:text-zinc-400 mt-0.5">
           Systemkonfiguration, Bildverarbeitung, aktive Verzeichnispfade und lokaler Betriebsstatus.
         </p>
+      </div>
+
+      {/* Erscheinungsbild / Theme-System */}
+      <div className="p-5 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl space-y-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <SunMoon className="w-4 h-4 text-amber-500 dark:text-amber-400" />
+            <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+              Erscheinungsbild (Theme)
+            </h3>
+          </div>
+          <span className="text-xs text-zinc-500 dark:text-zinc-400">
+            Aktuell aktiv:{' '}
+            <span className="font-semibold text-zinc-800 dark:text-zinc-200">
+              {resolvedTheme === 'dark' ? 'Dunkel' : 'Hell'}
+            </span>
+          </span>
+        </div>
+        <p className="text-xs text-zinc-500 dark:text-zinc-400">
+          Wähle ein festes Farbschema oder lasse Scanny automatisch dem Hell-/Dunkelmodus deines Betriebssystems (macOS, Windows, iOS, Android) folgen.
+        </p>
+
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1">
+          {[
+            {
+              id: 'system' as const,
+              title: 'Systemstandard (Auto)',
+              desc: `Folgt deinen Systemeinstellungen. Zurzeit vom System vorgegeben: ${
+                isSystemDark ? 'Dunkler Modus' : 'Heller Modus'
+              }.`,
+              icon: <Monitor className="w-5 h-5 text-blue-600 dark:text-blue-400" />,
+            },
+            {
+              id: 'light' as const,
+              title: 'Heller Modus',
+              desc: 'Klares, kontrastreiches helles Design. Ideal für Tageslicht und helle Arbeitsumgebungen.',
+              icon: <Sun className="w-5 h-5 text-amber-500" />,
+            },
+            {
+              id: 'dark' as const,
+              title: 'Dunkler Modus',
+              desc: 'Tiefes, augenschonendes dunkles Layout mit dezenten Kontrasten für die Abendstunden.',
+              icon: <Moon className="w-5 h-5 text-indigo-400" />,
+            },
+          ].map((modeItem) => {
+            const isSelected = theme === modeItem.id;
+            return (
+              <button
+                key={modeItem.id}
+                type="button"
+                id={`setting-theme-mode-${modeItem.id}`}
+                onClick={() => setTheme(modeItem.id)}
+                className={`p-4 text-left rounded-xl border transition-all cursor-pointer relative ${
+                  isSelected
+                    ? 'border-blue-600 bg-blue-50/50 dark:bg-blue-950/20 text-zinc-900 dark:text-zinc-100 ring-1 ring-blue-500 shadow-xs'
+                    : 'border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-800/40 text-zinc-800 dark:text-zinc-200 hover:border-zinc-300 dark:hover:border-zinc-700'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-2">
+                  <div className="w-9 h-9 rounded-xl bg-white dark:bg-zinc-800 border border-zinc-200/80 dark:border-zinc-700/80 flex items-center justify-center shadow-xs">
+                    {modeItem.icon}
+                  </div>
+                  {isSelected && (
+                    <span className="flex items-center gap-1 text-[11px] font-semibold text-blue-600 dark:text-blue-400 bg-blue-100/70 dark:bg-blue-900/40 px-2 py-0.5 rounded-md">
+                      <Check className="w-3 h-3" /> Aktiv
+                    </span>
+                  )}
+                </div>
+                <div className="font-semibold text-xs text-zinc-900 dark:text-zinc-100">{modeItem.title}</div>
+                <p className="text-[11px] text-zinc-500 dark:text-zinc-400 mt-1 leading-relaxed">
+                  {modeItem.desc}
+                </p>
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       {/* Automatisch ablegen */}

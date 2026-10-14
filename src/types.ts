@@ -16,8 +16,46 @@ export type ActiveView =
   | { type: 'inbox' }
   | { type: 'folder'; folderId: number }
   | { type: 'search' }
+  | { type: 'tools'; initialTool?: string }
   | { type: 'trash' }
   | { type: 'settings' };
+
+export type ThemeMode = 'system' | 'light' | 'dark';
+export type ResolvedTheme = 'light' | 'dark';
+
+
+export interface StudioPageItem {
+  id: string;
+  sourceFileName: string;
+  sourceType: 'pdf' | 'image' | 'text' | 'office';
+  originalPageIndex: number; // 0-based
+  displayNumber: number;
+  rotation: number; // 0, 90, 180, 270
+  thumbnailUrl: string;
+  width: number;
+  height: number;
+  sessionId: string;
+  pageKey: string;
+  textSnippet?: string;
+  fileSize?: number;
+}
+
+export type PageNumberPosition =
+  | 'bottom-center'
+  | 'bottom-right'
+  | 'bottom-left'
+  | 'top-center'
+  | 'top-right';
+
+export interface PageNumberConfig {
+  enabled: boolean;
+  position: PageNumberPosition;
+  format: 'page_x' | 'page_x_of_y' | 'just_x';
+  startFrom: number;
+  fontSize: number;
+}
+
+export type CompressionLevel = 'none' | 'light' | 'medium' | 'high';
 
 export interface SystemHealth {
   ok: boolean;

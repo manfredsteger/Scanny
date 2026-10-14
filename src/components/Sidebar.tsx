@@ -12,8 +12,11 @@ import {
   ScanLine,
   LayoutDashboard,
   Trash2,
+  Wrench,
 } from 'lucide-react';
 import { Folder, ActiveView } from '../types';
+import { ThemeToggle } from './ThemeToggle';
+
 
 interface SidebarProps {
   folders: Folder[];
@@ -145,17 +148,24 @@ export function Sidebar({
       id="main-sidebar"
       className="w-64 h-screen border-r border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900/90 flex flex-col shrink-0 select-none"
     >
-      {/* App Header / Logo */}
+      {/* App Header / Logo (klickbar um jederzeit zu Scanny zurückzukehren) */}
       <div className="p-4 border-b border-zinc-100 dark:border-zinc-800/80 flex items-center justify-between">
-        <div className="flex items-center gap-2.5">
-          <div className="w-8 h-8 rounded-xl bg-blue-600 text-white flex items-center justify-center shadow-xs">
+        <button
+          type="button"
+          onClick={() => onSelectView({ type: 'dashboard' })}
+          className="flex items-center gap-2.5 text-left group cursor-pointer focus:outline-none"
+          title="Zurück zur Belegübersicht (Scanny)"
+        >
+          <div className="w-8 h-8 rounded-xl bg-blue-600 text-white flex items-center justify-center shadow-xs group-hover:scale-105 group-hover:bg-blue-500 transition-all">
             <ScanLine className="w-4 h-4" />
           </div>
           <div>
-            <h1 className="text-sm font-bold tracking-tight text-zinc-900 dark:text-white">Scanny</h1>
+            <h1 className="text-sm font-bold tracking-tight text-zinc-900 dark:text-white group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">
+              Scanny
+            </h1>
             <p className="text-[11px] text-zinc-500 dark:text-zinc-400 leading-none">Home Office Belege</p>
           </div>
-        </div>
+        </button>
       </div>
 
       {/* Navigationsbereich */}
@@ -301,6 +311,20 @@ export function Sidebar({
 
           <button
             type="button"
+            id="nav-tools-button"
+            onClick={() => onSelectView({ type: 'tools' })}
+            className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm font-medium transition-all cursor-pointer ${
+              activeView.type === 'tools'
+                ? 'bg-blue-50 dark:bg-blue-950/50 text-blue-600 dark:text-blue-400 font-semibold'
+                : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800/60'
+            }`}
+          >
+            <Wrench className="w-4 h-4" />
+            <span>Tools</span>
+          </button>
+
+          <button
+            type="button"
             id="nav-trash-button"
             onClick={() => onSelectView({ type: 'trash' })}
             className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-sm font-medium transition-all cursor-pointer ${
@@ -336,8 +360,12 @@ export function Sidebar({
         </div>
       </div>
 
-      {/* Footer mit lokalem Status */}
-      <div className="p-3 border-t border-zinc-100 dark:border-zinc-800/80">
+      {/* Footer mit Theme-Auswahl und lokalem Status */}
+      <div className="p-3 border-t border-zinc-100 dark:border-zinc-800/80 space-y-2.5">
+        <div className="flex items-center justify-between px-1">
+          <span className="text-[11px] font-medium text-zinc-500 dark:text-zinc-400">Design</span>
+          <ThemeToggle variant="segmented" />
+        </div>
         <div className="flex items-center gap-2 text-[11px] text-zinc-500 dark:text-zinc-400 px-1">
           <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
           <span>Lokal auf Ihrem Rechner</span>

@@ -6,6 +6,7 @@ import { foldersRouter } from './routes/folders.js';
 import { settingsRouter } from './routes/settings.js';
 import { documentsRouter } from './routes/documents.js';
 import { exportRouter } from './routes/export.js';
+import { toolsRouter } from './routes/tools.js';
 import { initQueue } from './pipeline/queue.js';
 import { startWatcher } from './pipeline/watcher.js';
 import { startTrashCleanup } from './pipeline/trash.js';
@@ -35,6 +36,7 @@ async function startServer() {
   app.use('/api', settingsRouter);
   app.use('/api', documentsRouter);
   app.use('/api', exportRouter);
+  app.use('/api', toolsRouter);
 
   // Unbekannte API-Pfade vor dem SPA-Fallback abfangen
   app.use('/api', (req, res) => {
