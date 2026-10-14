@@ -25,6 +25,7 @@ import {
 } from './types';
 import {
   AlertCircle,
+  Info,
   Trash2,
   X,
   UploadCloud,
@@ -33,6 +34,33 @@ import {
   ArrowRight,
   Search as SearchIcon,
 } from 'lucide-react';
+
+/** Übersprungene Dateien als ruhigen Hinweis: nach Dateityp gruppiert statt je Datei ein langer Satz. */
+function skippedToast(rejected: { name?: string }[], acceptedCount: number) {
+  const label = (ext: string) =>
+    ({
+      zip: 'ZIP-Archive', rar: 'RAR-Archive', '7z': '7z-Archive', doc: 'Word-Dokumente', docx: 'Word-Dokumente',
+      xls: 'Excel-Tabellen', xlsx: 'Excel-Tabellen', ppt: 'PowerPoint', pptx: 'PowerPoint', stl: '3D-Modelle',
+      '3mf': '3D-Modelle', mp4: 'Videos', mov: 'Videos', '': 'Ohne Dateiendung',
+    } as Record<string, string>)[ext] || `${ext.toUpperCase()}-Dateien`;
+  const groups = new Map<string, string[]>();
+  for (const r of rejected) {
+    const name = r.name || 'Unbekannte Datei';
+    const ext = name.includes('.') ? name.split('.').pop()!.toLowerCase() : '';
+    const key = label(ext);
+    groups.set(key, [...(groups.get(key) || []), name]);
+  }
+  const n = rejected.length;
+  return {
+    id: String(Date.now()),
+    tone: 'info' as const,
+    title: `${n} ${n === 1 ? 'Datei' : 'Dateien'} übersprungen` + (acceptedCount > 0 ? ` – ${acceptedCount} übernommen` : ''),
+    lines: [
+      ...[...groups.entries()].map(([group, names]) => `${group}: ${names.join(', ')}`),
+      'Scanny nimmt Fotos (JPG, PNG, HEIC), PDFs und Textdateien (TXT, MD) an.',
+    ],
+  };
+}
 
 export default function App() {
   const [folders, setFolders] = useState<Folder[]>([]);
@@ -89,6 +117,8 @@ export default function App() {
     id: string;
     title: string;
     lines: string[];
+    /** info = Dateien bewusst übersprungen (kein Fehler), error = Upload fehlgeschlagen */
+    tone?: 'info' | 'error';
   } | null>(null);
 
   useEffect(() => {
@@ -258,15 +288,7 @@ export default function App() {
         if (!res.ok) {
           // Fall "nur ungültige Dateien" (Status 400) oder anderer Fehler
           if (result?.rejected && Array.isArray(result.rejected) && result.rejected.length > 0) {
-            const lines = result.rejected.map(
-              (r: { name?: string; reason?: string }) =>
-                `Nicht übernommen: ${r.name || 'Unbekannte Datei'} (${r.reason || 'Nicht unterstützt'})`
-            );
-            setUploadToast({
-              id: String(Date.now()),
-              title: result.error || 'Dateien nicht unterstützt',
-              lines,
-            });
+            setUploadToast(skippedToast(result.rejected, 0));
             return;
           }
           throw new Error(result?.error || 'Upload fehlgeschlagen');
@@ -274,15 +296,7 @@ export default function App() {
 
         // Falls einige Dateien abgelehnt wurden, aber andere übernommen werden konnten
         if (result?.rejected && Array.isArray(result.rejected) && result.rejected.length > 0) {
-          const lines = result.rejected.map(
-            (r: { name?: string; reason?: string }) =>
-              `Nicht übernommen: ${r.name || 'Unbekannte Datei'} (${r.reason || 'Nicht unterstützt'})`
-          );
-          setUploadToast({
-            id: String(Date.now()),
-            title: 'Einige Dateien wurden nicht übernommen',
-            lines,
-          });
+          setUploadToast(skippedToast(result.rejected, Array.isArray(result.ids) ? result.ids.length : 0));
         }
 
         // Dokumente sofort neu abrufen
@@ -688,11 +702,19 @@ export default function App() {
         {uploadToast && (
           <div
             id="upload-toast-notification"
-            role="alert"
-            className="pointer-events-auto w-full bg-zinc-900 dark:bg-zinc-800 text-white p-4 rounded-2xl shadow-2xl border border-red-500/40 flex items-start gap-3 animate-in slide-in-from-bottom duration-200"
+            role={uploadToast.tone === 'info' ? 'status' : 'alert'}
+            className={`pointer-events-auto w-full bg-zinc-900 dark:bg-zinc-800 text-white p-4 rounded-2xl shadow-2xl border flex items-start gap-3 animate-in slide-in-from-bottom duration-200 ${
+              uploadToast.tone === 'info' ? 'border-amber-500/40' : 'border-red-500/40'
+            }`}
           >
-            <div className="w-8 h-8 rounded-xl bg-red-600/30 border border-red-500/50 text-red-300 flex items-center justify-center shrink-0 mt-0.5">
-              <AlertCircle className="w-4 h-4" />
+            <div
+              className={`w-8 h-8 rounded-xl border flex items-center justify-center shrink-0 mt-0.5 ${
+                uploadToast.tone === 'info'
+                  ? 'bg-amber-500/20 border-amber-500/40 text-amber-300'
+                  : 'bg-red-600/30 border-red-500/50 text-red-300'
+              }`}
+            >
+              {uploadToast.tone === 'info' ? <Info className="w-4 h-4" /> : <AlertCircle className="w-4 h-4" />}
             </div>
             <div className="flex-1 text-xs space-y-1 min-w-0">
               <p className="font-semibold text-zinc-100">{uploadToast.title}</p>
