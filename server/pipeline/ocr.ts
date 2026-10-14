@@ -168,6 +168,39 @@ export function syncArchivePdf(id: number): string | null {
   return newPath;
 }
 
+// pdfminer liest eingebettete TrueType-Schriften ohne ToUnicode-Tabelle korrekt (z. B. PDFs aus
+// Browsern/Designtools); Ghostscript txtwrite liefert dort für ä/ö/ü/ß nur Steuerzeichen \x01, \x02 …
+const PDFMINER_SCRIPT = `
+import sys
+from pdfminer.high_level import extract_text
+first, last = int(sys.argv[2]), int(sys.argv[3])
+sys.stdout.write(extract_text(sys.argv[1], page_numbers=range(first - 1, last)))
+`;
+
+/**
+ * Vorhandenen Text der PDF-Seiten first..last (1-basiert) auslesen.
+ * Bevorzugt pdfminer, fällt auf Ghostscript zurück. Steuerzeichen werden entfernt.
+ */
+export async function extractPdfText(pdfPath: string, first: number, last: number): Promise<string> {
+  const opts = { timeout: 60000, maxBuffer: 20 * 1024 * 1024, encoding: 'utf8' as const };
+  let text: string;
+  try {
+    ({ stdout: text } = await execFileAsync(
+      'python3',
+      ['-c', PDFMINER_SCRIPT, pdfPath, String(first), String(last)],
+      { ...opts, env: { ...process.env, PYTHONIOENCODING: 'utf-8' } }
+    ));
+  } catch (err) {
+    console.warn(`[OCR] pdfminer fehlgeschlagen (${pdfPath}), nutze Ghostscript:`, err);
+    ({ stdout: text } = await execFileAsync(
+      'gs',
+      ['-q', '-sDEVICE=txtwrite', `-dFirstPage=${first}`, `-dLastPage=${last}`, '-o', '-', pdfPath],
+      opts
+    ));
+  }
+  return text.replace(/\r\n?/g, '\n').replace(/[\x00-\x08\x0B\x0E-\x1F\x7F]/g, '');
+}
+
 export interface OcrPipelineOptions {
   id: number;
   inputPath: string;
@@ -188,7 +221,7 @@ export interface OcrPipelineResult {
 
 /**
  * Führt die OCR-Pipeline mit ocrmypdf aus:
- * - Bei Bildern: --image-dpi 300 -l deu+eng --rotate-pages --deskew --output-type pdfa --optimize 1 --jobs 2
+ * - Bei Bildern: --image-dpi 300 -l deu --rotate-pages --deskew --output-type pdfa --optimize 1 --jobs 2
  * - Bei PDFs: --skip-text statt --image-dpi
  * - Exit-Code 6 (bereits Text vorhanden) wird abgefangen und ist KEIN Fehler.
  * - Sidecar-Text wird ausgelesen.
@@ -214,11 +247,13 @@ export async function runOcrPipeline(options: OcrPipelineOptions): Promise<OcrPi
   }
 
   // ocrmypdf Argumente vorbereiten
+  // Nur "deu": Mit "deu+eng" nimmt Tesseract für einzelne Wörter das englische Modell, das keine
+  // Umlaute kennt ("Backerei", "Munchen", "Aschach"). Englischer Text wird mit "deu" trotzdem gelesen.
   const args: string[] = [];
   if (isPdf) {
     args.push(
       '--skip-text',
-      '-l', 'deu+eng',
+      '-l', 'deu',
       '--rotate-pages',
       '--deskew',
       '--output-type', 'pdfa',
@@ -231,7 +266,7 @@ export async function runOcrPipeline(options: OcrPipelineOptions): Promise<OcrPi
   } else {
     args.push(
       '--image-dpi', '300',
-      '-l', 'deu+eng',
+      '-l', 'deu',
       '--rotate-pages',
       '--deskew',
       '--output-type', 'pdfa',
@@ -288,7 +323,7 @@ export async function runOcrPipeline(options: OcrPipelineOptions): Promise<OcrPi
   }
 
   // Bei PDF-Eingängen steht im Sidecar für Seiten mit vorhandenem Text nur "[OCR skipped on page(s) 1-2]".
-  // Diese Platzhalter durch den vorhandenen Text der Originalseiten ersetzen (Ghostscript txtwrite).
+  // Diese Platzhalter durch den vorhandenen Text der Originalseiten ersetzen (pdfminer, Fallback Ghostscript).
   if (isPdf && ocrText && ocrText.includes('[OCR skipped on page')) {
     const markerRe = /\[OCR skipped on page\(s\) (\d+)(?:-(\d+))?\]/g;
     const parts: string[] = [];
@@ -298,11 +333,7 @@ export async function runOcrPipeline(options: OcrPipelineOptions): Promise<OcrPi
       const first = m[1];
       const last = m[2] || m[1];
       try {
-        const { stdout } = await execFileAsync(
-          'gs',
-          ['-q', '-sDEVICE=txtwrite', `-dFirstPage=${first}`, `-dLastPage=${last}`, '-o', '-', inputPath],
-          { timeout: 60000, maxBuffer: 20 * 1024 * 1024 }
-        );
+        const stdout = await extractPdfText(inputPath, Number(first), Number(last));
         parts.push(
           stdout
             .split('\n')
