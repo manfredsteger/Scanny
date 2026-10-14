@@ -127,7 +127,10 @@ export function groupLabel(doc: {
  */
 export function reserveBase(dir: string, label: string, suffixes: string[], own: Set<string> = new Set()): string {
   const cut = (s: string, max: number) => (s.length > max ? s.slice(0, max).trim() : s);
-  const isFree = (p: string) => !fs.existsSync(p) || own.has(p);
+  // Vergleich ohne Groß-/Kleinschreibung: macOS-Dateisysteme unterscheiden sie nicht, sonst hielte
+  // "stapeltest.md" → "Stapeltest.md" die eigene Datei für einen Fremden und wiche auf " (2)" aus
+  const ownLower = new Set([...own].map((p) => p.toLowerCase()));
+  const isFree = (p: string) => !fs.existsSync(p) || ownLower.has(p.toLowerCase());
   for (let n = 1; n < 10000; n++) {
     const extra = n === 1 ? '' : ` (${n})`;
     const base = cut(label, MAX_BASE_LENGTH - extra.length) + extra;

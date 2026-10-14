@@ -1,4 +1,5 @@
 import { SourceEditor } from './SourceEditor';
+import { DocumentFiles } from './DocumentFiles';
 import React, { useState, useEffect } from 'react';
 import {
   X,
@@ -868,6 +869,9 @@ export function DocumentDetailDrawer({
                 </div>
               )}
             </div>
+
+            {/* Dateien: so liegt die Dateigruppe im Archiv (PDF, Original, Teile eines Stapels) */}
+            <DocumentFiles doc={localDoc} pages={pages} />
 
             {/* Seiten: zusammengefügte Belege trennen, weitere Seite anhängen */}
             {!isTrashed && (

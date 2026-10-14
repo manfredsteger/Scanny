@@ -213,6 +213,9 @@ export interface DocumentPageInfo {
   source_original_name: string | null;
   source_page_count: number | null;
   source_deleted_at: string | null;
+  /** Dateinamen des Teils im Stapel-Ordner "<Name> (Originale)/" */
+  source_pdf_file?: string | null;
+  source_original_file?: string | null;
 }
 
 /** Nach so vielen Tagen im Papierkorb löscht Scanny endgültig (siehe server/pipeline/trash.ts). */

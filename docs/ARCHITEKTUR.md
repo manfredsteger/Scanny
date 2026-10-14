@@ -295,3 +295,19 @@ Archiv/<Ordner | _Eingang | _Papierkorb>/
   UI: Tab „Quelltext“ im Detail-Drawer (`SourceEditor.tsx`, ⌘S), Abzeichen „Textdatei“ + Filter
   „Alle · Scans · Textdateien“ im Eingang.
 - **FALLE:** `fonts-dejavu-core` enthält KEINE Kursivschnitte → `fonts-dejavu-extra` im Dockerfile.
+
+
+---
+
+## 11. Stapel-Kachel & Abschnitt „Dateien“ (2026-10-14)
+
+- **Stapel** (`src/components/StackFrame.tsx`, `stackInfo()`): nur wo mehrere eigenständige Teile
+  dahinterstecken – Textdateien („PDF + MD“, 1 Karte dahinter) und zusammengefügte Dokumente
+  („11 Teile“, 2 Karten). Fotos/PDFs haben zwar auch ein Original, bekommen aber bewusst KEINEN Stapel,
+  sonst wäre jede Kachel einer und das Signal wertlos. Eingang und Ordner-Kacheln nutzen dieselbe Komponente.
+- **Dateien** im Detail-Drawer (`DocumentFiles.tsx`): PDF, Original und bei Stapeln der Ordner
+  „<Name> (Originale)/“ mit allen Teilen (ab 4 Teilen zugeklappt), je Öffnen/Herunterladen mit den
+  echten Archivnamen. `/original` liefert jetzt den sprechenden Archivnamen und kennt `?download=1`;
+  `/pages` gibt die Dateinamen der Teile mit.
+- **FALLE (behoben):** macOS unterscheidet Groß-/Kleinschreibung in Dateinamen nicht → `reserveBase()`
+  vergleicht eigene Pfade case-insensitiv, sonst wurde aus „stapeltest“ → „Stapeltest“ ein „(2)“.

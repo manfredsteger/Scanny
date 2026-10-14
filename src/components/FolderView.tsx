@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { StackFrame } from './StackFrame';
 import {
   Folder as FolderIcon,
   Edit2,
@@ -500,8 +501,8 @@ export function FolderView({
             const formattedAmount = formatAmount(doc.amount_cents);
 
             return (
+              <StackFrame key={doc.id} doc={doc}>
               <div
-                key={doc.id}
                 onClick={(e) => {
                   // Bei aktiver Auswahl wählt ein Klick aus, statt den Beleg zu öffnen
                   if (selectedIds.size > 0) toggleSelect(doc.id);
@@ -594,6 +595,7 @@ export function FolderView({
                   </div>
                 </div>
               </div>
+              </StackFrame>
             );
           })}
         </div>

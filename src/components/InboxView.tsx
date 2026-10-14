@@ -21,6 +21,7 @@ import {
   FileCode,
   X,
 } from 'lucide-react';
+import { StackFrame, stackInfo } from './StackFrame';
 import { Folder, ScannyDocument, SystemPaths, formatDocumentType, suggestFolderId } from '../types';
 
 interface InboxViewProps {
@@ -661,9 +662,10 @@ export function InboxView({
             // Normale Kachel (bereit zur Prüfung oder bereits im Eingang)
             const isSelected = selectedIds.has(doc.id);
             const suggestedFolder = folders.find((f) => f.id === suggestFolderId(folders, doc.doc_date));
+            const stack = stackInfo(doc);
             return (
+              <StackFrame key={doc.id} doc={doc}>
               <div
-                key={doc.id}
                 id={`doc-card-${doc.id}`}
                 onClick={(e) => {
                   // Bei aktiver Auswahl wählt ein Klick (bzw. Shift-Klick) aus statt zu öffnen
@@ -741,7 +743,19 @@ export function InboxView({
                       title="Aus einer Textdatei erzeugt – Quelltext in der Detailansicht bearbeitbar"
                     >
                       <FileCode className="w-3 h-3 shrink-0" />
-                      <span>Textdatei</span>
+                      <span>Textdatei{stack ? ` · ${stack.label}` : ''}</span>
+                    </div>
+                  )}
+
+                  {/* Stapel aus zusammengefügten Belegen */}
+                  {doc.kind !== 'text' && stack && (
+                    <div
+                      id={`doc-tile-stack-${doc.id}`}
+                      className="absolute bottom-2.5 left-2.5 bg-zinc-900/85 backdrop-blur-xs text-white text-[10px] font-semibold px-2 py-0.5 rounded-lg shadow-xs flex items-center gap-1"
+                      title="Zusammengefügt – die einzelnen Teile liegen im Ordner „(Originale)“ daneben"
+                    >
+                      <Layers className="w-3 h-3 shrink-0" />
+                      <span>Stapel · {stack.label}</span>
                     </div>
                   )}
 
@@ -834,6 +848,7 @@ export function InboxView({
                   </div>
                 </div>
               </div>
+              </StackFrame>
             );
           })}
         </div>

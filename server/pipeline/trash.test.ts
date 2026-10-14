@@ -241,6 +241,14 @@ describe('Dateigruppen (PDF + Original mit gleichem Namen)', () => {
     expect(path.basename(getDoc(id).original_path)).toBe('2026-05-04 Neu.jpg');
   });
 
+  it('benennt bei reiner Groß-/Kleinschreibungs-Änderung ohne (2) um', async () => {
+    const id = await createDocument({ title: 'stapeltest' });
+    getDb().prepare("UPDATE documents SET title = 'Stapeltest' WHERE id = ?").run(id);
+    syncDocumentFiles(id);
+    expect(path.basename(getDoc(id).pdf_path)).toBe('2026-05-04 Stapeltest.pdf');
+    expect(list(inbox())).toEqual(['2026-05-04 Stapeltest.jpg', '2026-05-04 Stapeltest.pdf']);
+  });
+
   it('weicht bei Namensgleichheit für die ganze Gruppe auf (2) aus', async () => {
     const a = await createDocument({ title: 'Gleich' });
     const b = await createDocument({ title: 'Anders' });

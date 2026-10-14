@@ -362,12 +362,13 @@ documentsRouter.get('/documents/:id/original', (req: Request, res: Response) => 
     else if (ext === '.md' || ext === '.markdown') contentType = 'text/markdown; charset=utf-8';
     else if (ext === '.txt') contentType = 'text/plain; charset=utf-8';
 
-    const filename = doc.original_name || 'dokument';
+    // Sprechender Archivname ("2026-10-12 Quittung ….jpg"), nicht der Upload-Name
+    const filename = path.basename(doc.original_path) || doc.original_name || 'dokument';
     const encodedFilename = encodeURIComponent(filename).replace(/['()]/g, escape).replace(/\*/g, '%2A');
     const asciiFallback = filename.replace(/[^\x20-\x7E]/g, '_');
 
     res.setHeader('Content-Type', contentType);
-    res.setHeader('Content-Disposition', `inline; filename="${asciiFallback}"; filename*=UTF-8''${encodedFilename}`);
+    res.setHeader('Content-Disposition', `${req.query.download === '1' ? 'attachment' : 'inline'}; filename="${asciiFallback}"; filename*=UTF-8''${encodedFilename}`);
     res.sendFile(doc.original_path);
   } catch (error: any) {
     console.error('Fehler beim Ausliefern der Originaldatei:', error);
@@ -1077,15 +1078,23 @@ documentsRouter.get('/documents/:id/pages', (req: Request, res: Response) => {
       .prepare(`
         SELECT p.page_no, p.source_document_id,
                s.title AS source_title, s.original_name AS source_original_name,
-               s.page_count AS source_page_count, s.deleted_at AS source_deleted_at
+               s.page_count AS source_page_count, s.deleted_at AS source_deleted_at,
+               s.pdf_path AS source_pdf_path, s.original_path AS source_original_path
         FROM document_pages p
         LEFT JOIN documents s ON s.id = p.source_document_id
         WHERE p.document_id = ?
         ORDER BY p.page_no ASC
       `)
-      .all(id);
+      .all(id) as any[];
 
-    res.json(rows);
+    // Nur Dateinamen nach außen geben (Teile liegen in "<Name> (Originale)/")
+    res.json(
+      rows.map(({ source_pdf_path, source_original_path, ...row }) => ({
+        ...row,
+        source_pdf_file: source_pdf_path ? path.basename(source_pdf_path) : null,
+        source_original_file: source_original_path ? path.basename(source_original_path) : null,
+      }))
+    );
   } catch (error: any) {
     console.error('Fehler beim Laden der Seitenherkunft:', error);
     res.status(500).json({ error: 'Seiten konnten nicht geladen werden.' });
